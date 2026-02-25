@@ -1,0 +1,136 @@
+.client-list {
+  background: #2a2a2a;
+  padding: 25px;
+  border: 1px solid #3a3a3a;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.client-list h2 {
+  color: #ffffff;
+  margin-bottom: 20px;
+  font-size: 1.5rem;
+  position: sticky;
+  top: 0;
+  background: #2a2a2a;
+  padding-bottom: 10px;
+  z-index: 1;
+}
+
+.empty-clients {
+  text-align: center;
+  padding: 40px;
+  color: #999999;
+}
+
+.clients-items {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.client-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 15px;
+  padding: 15px;
+  background: #1a1a1a;
+  border: 1px solid #3a3a3a;
+  transition: background 0.2s;
+}
+
+.client-item:hover {
+  background: #2a2a2a;
+}
+
+.client-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.client-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.client-admin-badge {
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: 1px solid;
+}
+
+.client-admin-badge.admin {
+  background: #1a1a1a;
+  color: #4a9eff;
+  border-color: #4a9eff;
+}
+
+.client-admin-badge.user {
+  background: #1a1a1a;
+  color: #999999;
+  border-color: #666666;
+}
+
+.client-id {
+  color: #cccccc;
+  font-size: 0.85rem;
+  font-family: monospace;
+}
+
+.client-details {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.client-details p {
+  color: #999999;
+  font-size: 0.85rem;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.client-ip {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.client-host {
+  color: #cccccc;
+}
+
+.client-time {
+  color: #999999;
+}
+
+.client-user-agent {
+  color: #666666;
+  font-size: 0.75rem;
+}
+
+.disconnect-btn {
+  padding: 8px 16px;
+  background: #2a2a2a;
+  color: #ffffff;
+  border: 1px solid #ff4444;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.disconnect-btn:hover {
+  background: #ff4444;
+  color: #ffffff;
+}
+
+.disconnect-btn:active {
+  background: #cc3333;
+}
+

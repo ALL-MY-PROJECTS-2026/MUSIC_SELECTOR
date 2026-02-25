@@ -1,0 +1,153 @@
+.music-request-form {
+  background: #2a2a2a;
+  padding: 25px;
+  border: 1px solid #3a3a3a;
+}
+
+.music-request-form h2 {
+  color: #ffffff;
+  margin-bottom: 20px;
+  font-size: 1.5rem;
+}
+
+.input-group {
+  display: flex;
+  gap: 10px;
+}
+
+.music-input {
+  flex: 1;
+  padding: 12px 20px;
+  border: 1px solid #3a3a3a;
+  background: #1a1a1a;
+  color: #ffffff;
+  font-size: 1rem;
+  transition: border-color 0.3s;
+}
+
+.music-input:focus {
+  outline: none;
+  border-color: #666666;
+}
+
+.music-input:disabled {
+  background: #1a1a1a;
+  color: #666666;
+  cursor: not-allowed;
+}
+
+.music-input::placeholder {
+  color: #666666;
+}
+
+.submit-btn {
+  padding: 12px 30px;
+  background: #ffffff;
+  color: #1a1a1a;
+  border: 1px solid #3a3a3a;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.submit-btn:hover:not(:disabled) {
+  background: #e0e0e0;
+}
+
+.submit-btn:active:not(:disabled) {
+  background: #cccccc;
+}
+
+.submit-btn:disabled {
+  background: #2a2a2a;
+  color: #666666;
+  cursor: not-allowed;
+}
+
+.search-results {
+  margin-top: 20px;
+}
+
+.search-results h3 {
+  color: #ffffff;
+  font-size: 1.1rem;
+  margin-bottom: 15px;
+}
+
+.results-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.result-item {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 12px;
+  background: #1a1a1a;
+  border: 1px solid #3a3a3a;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.result-item:hover {
+  background: #2a2a2a;
+  border-color: #666666;
+}
+
+.result-thumbnail {
+  width: 80px;
+  height: 60px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.result-thumbnail img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.result-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.result-info h4 {
+  color: #ffffff;
+  font-size: 0.95rem;
+  margin-bottom: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.result-duration {
+  color: #999999;
+  font-size: 0.85rem;
+}
+
+.select-btn {
+  padding: 8px 20px;
+  background: #ffffff;
+  color: #1a1a1a;
+  border: 1px solid #3a3a3a;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.select-btn:hover {
+  background: #e0e0e0;
+}
+
+.select-btn:active {
+  background: #cccccc;
+}
+
