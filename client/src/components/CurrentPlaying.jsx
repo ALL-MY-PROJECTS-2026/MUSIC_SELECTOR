@@ -448,7 +448,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                   onClick={handlePause} 
                   className="control-btn pause-btn"
                 >
-                  일시정지
+                  정지
                 </button>
               ) : (
                 <button 

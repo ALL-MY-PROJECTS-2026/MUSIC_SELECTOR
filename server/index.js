@@ -112,6 +112,27 @@ io.on('connection', (socket) => {
     hasControl: hasControl
   });
 
+  // 재연결 시 자동 재생 체크 (제어권 부여 후)
+  if (hasControl && isAdmin) {
+    const queue = queueManager.getQueue();
+    // 대기열에 곡이 있고 재생 중이 아니면 자동 재생
+    if (queue.length > 0 && !isPlaying) {
+      console.log(`[connection] 재연결 시 자동 재생 체크: 대기열 ${queue.length}개, isPlaying=${isPlaying}`);
+      console.log(`[connection] 자동 재생 시작 (재연결 후)`);
+      // 약간의 지연을 두어 클라이언트가 상태를 받은 후 재생
+      setTimeout(() => {
+        playNextMusic();
+      }, 500);
+    } else if (queue.length > 0 && isPlaying && !currentPlaying) {
+      // 재생 중이라고 표시되어 있지만 실제 재생 중인 곡이 없으면 재생
+      console.log(`[connection] 재연결 시 상태 불일치 감지: isPlaying=true지만 currentPlaying=null`);
+      console.log(`[connection] 자동 재생 시작 (상태 불일치 복구)`);
+      setTimeout(() => {
+        playNextMusic();
+      }, 500);
+    }
+  }
+
   // 음악 검색 이벤트 (검색 결과만 반환)
   socket.on('searchMusic', async (data) => {
     try {
@@ -179,12 +200,31 @@ io.on('connection', (socket) => {
       io.emit('queueUpdated', queueManager.getQueue());
 
       // 현재 재생 중이 아니면 자동으로 재생 시작
-      if (!isPlaying) {
-        console.log('현재 재생 중이 아니므로 대기열의 첫 번째 곡 자동 재생 시작');
+      // 상태 검증 강화: isPlaying뿐만 아니라 currentPlaying 존재 여부와 제어권도 확인
+      const shouldAutoPlay = !isPlaying || !currentPlaying;
+      const hasControlForPlay = !!controlSessionId;
+      
+      if (shouldAutoPlay && hasControlForPlay) {
+        console.log('현재 재생 중이 아니므로 대기열의 첫 번째 곡 자동 재생 시작', {
+          isPlaying,
+          hasCurrentPlaying: !!currentPlaying,
+          hasControl: hasControlForPlay
+        });
         // playNextMusic을 호출하여 대기열의 첫 번째 곡 재생
         setTimeout(() => {
           playNextMusic();
         }, 100);
+      } else if (shouldAutoPlay && !hasControlForPlay) {
+        console.log('자동 재생 조건은 만족하지만 제어권이 없어서 대기 중', {
+          isPlaying,
+          hasCurrentPlaying: !!currentPlaying,
+          hasControl: hasControlForPlay
+        });
+      } else {
+        console.log('현재 재생 중이므로 자동 재생하지 않음', {
+          isPlaying,
+          hasCurrentPlaying: !!currentPlaying
+        });
       }
 
       socket.emit('musicAdded', { message: '음악이 대기열에 추가되었습니다.' });
@@ -456,18 +496,44 @@ io.on('connection', (socket) => {
       controlSessionId = null;
       console.log('제어권 해제됨 (세션 연결 해제)');
       
+      // 제어권 해제 시 상태 완전 초기화 (실제 재생 불가하므로)
+      console.log('[disconnect] 제어권 해제로 인한 상태 초기화');
+      isProcessingNext = false;
+      
+      // 타이머 정리 (제어권이 없으면 재생 불가)
+      if (autoPlayTimer) {
+        console.log('[disconnect] 제어권 해제로 인한 타이머 정리');
+        clearTimeout(autoPlayTimer);
+        autoPlayTimer = null;
+      }
+      
+      // 재생 상태 초기화 (제어권이 없으면 실제 재생 불가)
+      // 단, currentPlaying은 유지 (재연결 시 상태 확인용)
+      isPlaying = false;
+      console.log('[disconnect] isPlaying = false 설정 (제어권 없음)');
+      
       // 다른 관리자 중 첫 번째에게 제어권 부여
+      let controlTransferred = false;
       for (const [socketId, clientInfo] of connectedClients.entries()) {
         if (clientInfo.isAdmin && socketId !== socket.id) {
           const targetSocket = io.sockets.sockets.get(socketId);
           if (targetSocket) {
             controlSessionId = socketId;
             clientInfo.hasControl = true;
+            controlTransferred = true;
             console.log(`제어권 이전: ${socketId}`);
             targetSocket.emit('controlStatus', { hasControl: true });
             break;
           }
         }
+      }
+      
+      // 제어권이 이전되지 않았으면 상태 완전 초기화
+      if (!controlTransferred) {
+        console.log('[disconnect] 제어권 이전 없음 - 상태 완전 초기화');
+        currentPlaying = null;
+        playStartTime = null;
+        musicDuration = null;
       }
       
       // 모든 관리자에게 제어권 상태 업데이트
@@ -536,23 +602,54 @@ function startPlaying(music) {
       currentPlayingId: currentPlaying?.id, 
       musicId: music.id, 
       isPlaying,
-      queueLength: queueManager.getQueue().length
+      queueLength: queueManager.getQueue().length,
+      hasControl: !!controlSessionId
     });
+    
+    // 제어권이 없으면 타이머 실행하지 않음 (실제 재생 불가)
+    if (!controlSessionId) {
+      console.log('서버 타이머 무시: 제어권이 없음 - 상태 완전 정리');
+      isProcessingNext = false;
+      // 제어권이 없으면 실제 재생 불가하므로 상태 초기화
+      isPlaying = false;
+      // currentPlaying은 유지 (재연결 시 상태 확인용)
+      console.log('서버 타이머: isPlaying = false 설정 (제어권 없음)');
+      return;
+    }
+    
+    // 대기열이 비어있으면 타이머 실행하지 않음
+    const queue = queueManager.getQueue();
+    if (queue.length === 0) {
+      console.log('서버 타이머 무시: 대기열이 비어있음 - isProcessingNext 리셋');
+      isProcessingNext = false;
+      return;
+    }
     
     // 중복 처리 방지: 이미 처리 중이거나 다른 곡이 재생 중이면 무시
     if (!isProcessingNext && currentPlaying && currentPlaying.id === music.id && isPlaying) {
       console.log('서버 타이머: 자동 재생 시간 초과 - 다음 곡 재생');
       isProcessingNext = true;
-      // playNextMusic 내부에서 isProcessingNext 리셋
-      playNextMusic();
+      try {
+        // playNextMusic 내부에서 isProcessingNext 리셋
+        playNextMusic();
+      } catch (error) {
+        console.error('서버 타이머: playNextMusic 실행 오류:', error);
+        // 오류 발생 시 리셋 보장
+        isProcessingNext = false;
+      }
     } else {
-      // 이미 처리되었거나 다른 곡이 재생 중이면 타이머만 정리
+      // 이미 처리되었거나 다른 곡이 재생 중이면 타이머만 정리 및 리셋
       console.log('서버 타이머 무시:', { 
         isProcessingNext, 
         currentPlayingId: currentPlaying?.id, 
         musicId: music.id, 
         isPlaying 
       });
+      // 조건 불만족 시에도 리셋 (다음 재시도 가능하도록)
+      if (isProcessingNext && (!currentPlaying || currentPlaying.id !== music.id || !isPlaying)) {
+        console.log('서버 타이머: 조건 불만족으로 인한 isProcessingNext 리셋');
+        isProcessingNext = false;
+      }
     }
   }, timerDuration);
 }
@@ -564,7 +661,8 @@ function playNextMusic() {
     isProcessingNext, 
     currentPlaying: currentPlaying?.title,
     currentPlayingId: currentPlaying?.id,
-    queueLength: queue.length 
+    queueLength: queue.length,
+    hasControl: !!controlSessionId
   });
   
   // 중복 호출 방지: 이미 처리 중이면 무시
@@ -573,39 +671,58 @@ function playNextMusic() {
     return;
   }
   
+  // 제어권이 없으면 실행하지 않음 (실제 재생 불가)
+  if (!controlSessionId) {
+    console.log('[playNextMusic] 제어권이 없어서 실행하지 않음 - isProcessingNext 리셋');
+    isProcessingNext = false;
+    return;
+  }
+  
   // 플래그 설정 (중복 방지)
   isProcessingNext = true;
   console.log('[playNextMusic] isProcessingNext = true 설정');
   
-  // 타이머 정리 (백업 타이머 취소)
-  if (autoPlayTimer) {
-    console.log('[playNextMusic] 기존 타이머 정리');
-    clearTimeout(autoPlayTimer);
-    autoPlayTimer = null;
-  }
-  
-  console.log('[playNextMusic] 현재 대기열:', queue.map(m => ({ id: m.id, title: m.title })));
-  const nextMusic = queueManager.getNextMusic();
-  console.log('[playNextMusic] 다음 음악:', nextMusic ? { id: nextMusic.id, title: nextMusic.title } : '없음');
-  
-  if (nextMusic) {
-    queueManager.removeFromQueue(nextMusic.id);
-    console.log('[playNextMusic] 대기열에서 제거 후:', queueManager.getQueue().map(m => ({ id: m.id, title: m.title })));
-    console.log('[playNextMusic] startPlaying 호출 시작:', nextMusic.title);
-    startPlaying(nextMusic); // startPlaying 내부에서 isProcessingNext = false로 리셋
-    io.emit('queueUpdated', queueManager.getQueue());
-    console.log(`[playNextMusic] 다음 곡으로 전환 완료: ${nextMusic.title}`);
-  } else {
-    // 재생할 음악이 없으면 상태 초기화
-    console.log('[playNextMusic] 재생할 음악이 없어서 상태 초기화');
-    currentPlaying = null;
-    isPlaying = false;
-    playStartTime = null;
-    musicDuration = null;
-    isProcessingNext = false; // 플래그 리셋 (중요: 대기열에 곡이 추가되면 재생 가능하도록)
-    io.emit('musicStopped');
-    io.emit('queueUpdated', queueManager.getQueue());
-    console.log('[playNextMusic] 재생할 음악이 없습니다. 대기열에 곡이 추가되면 자동 재생됩니다.');
+  try {
+    // 타이머 정리 (백업 타이머 취소)
+    if (autoPlayTimer) {
+      console.log('[playNextMusic] 기존 타이머 정리');
+      clearTimeout(autoPlayTimer);
+      autoPlayTimer = null;
+    }
+    
+    console.log('[playNextMusic] 현재 대기열:', queue.map(m => ({ id: m.id, title: m.title })));
+    const nextMusic = queueManager.getNextMusic();
+    console.log('[playNextMusic] 다음 음악:', nextMusic ? { id: nextMusic.id, title: nextMusic.title } : '없음');
+    
+    if (nextMusic) {
+      queueManager.removeFromQueue(nextMusic.id);
+      console.log('[playNextMusic] 대기열에서 제거 후:', queueManager.getQueue().map(m => ({ id: m.id, title: m.title })));
+      console.log('[playNextMusic] startPlaying 호출 시작:', nextMusic.title);
+      startPlaying(nextMusic); // startPlaying 내부에서 isProcessingNext = false로 리셋
+      io.emit('queueUpdated', queueManager.getQueue());
+      console.log(`[playNextMusic] 다음 곡으로 전환 완료: ${nextMusic.title}`);
+    } else {
+      // 재생할 음악이 없으면 상태 초기화
+      console.log('[playNextMusic] 재생할 음악이 없어서 상태 초기화');
+      currentPlaying = null;
+      isPlaying = false;
+      playStartTime = null;
+      musicDuration = null;
+      isProcessingNext = false; // 플래그 리셋 (중요: 대기열에 곡이 추가되면 재생 가능하도록)
+      io.emit('musicStopped');
+      io.emit('queueUpdated', queueManager.getQueue());
+      console.log('[playNextMusic] 재생할 음악이 없습니다. 대기열에 곡이 추가되면 자동 재생됩니다.');
+    }
+  } catch (error) {
+    // 예외 발생 시 리셋 보장
+    console.error('[playNextMusic] 오류 발생:', error);
+    isProcessingNext = false;
+    // 상태 초기화
+    if (!currentPlaying) {
+      isPlaying = false;
+      playStartTime = null;
+      musicDuration = null;
+    }
   }
 }
 
