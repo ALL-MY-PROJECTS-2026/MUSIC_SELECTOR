@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import './ClientList.css';
 
-function ClientList({ socket, isAdmin }) {
+function ClientList({ socket, isAdmin, hasControl }) {
   const [clients, setClients] = useState([]);
 
   useEffect(() => {
@@ -37,6 +37,29 @@ function ClientList({ socket, isAdmin }) {
     }
   };
 
+  const handleDisconnectAll = () => {
+    // 제어권이 있는 세션을 제외한 모든 클라이언트 (관리자 포함)
+    const otherClientsCount = clients.filter(c => !c.hasControl).length;
+    if (otherClientsCount === 0) {
+      alert('해제할 클라이언트가 없습니다.');
+      return;
+    }
+    
+    const adminCount = clients.filter(c => !c.hasControl && c.isAdmin).length;
+    const userCount = clients.filter(c => !c.hasControl && !c.isAdmin).length;
+    
+    let confirmMessage = `제어권이 있는 세션을 제외한 모든 연결을 해제하시겠습니까?\n\n`;
+    confirmMessage += `총 ${otherClientsCount}개의 연결이 해제됩니다.`;
+    if (adminCount > 0) {
+      confirmMessage += `\n(관리자 세션 ${adminCount}개 포함, 사용자 ${userCount}개)`;
+    }
+    confirmMessage += `\n\n제어권이 있는 세션만 남게 됩니다.`;
+    
+    if (window.confirm(confirmMessage)) {
+      socket.emit('disconnectAllExceptController');
+    }
+  };
+
   const formatDate = (dateString) => {
     const date = new Date(dateString);
     return date.toLocaleString('ko-KR');
@@ -48,7 +71,14 @@ function ClientList({ socket, isAdmin }) {
 
   return (
     <div className="client-list">
-      <h2>연결된 클라이언트 ({clients.length})</h2>
+      <div className="client-list-header">
+        <h2>연결된 클라이언트 ({clients.length})</h2>
+        {hasControl && clients.length > 1 && (
+          <button onClick={handleDisconnectAll} className="disconnect-all-btn">
+            일괄 해제
+          </button>
+        )}
+      </div>
       {clients.length === 0 ? (
         <div className="empty-clients">
           <p>연결된 클라이언트가 없습니다.</p>

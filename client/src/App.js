@@ -42,6 +42,27 @@ function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [hasControl, setHasControl] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    // localStorage에서 테마 설정 불러오기 (기본값: 다크모드)
+    const savedTheme = localStorage.getItem('theme');
+    return savedTheme ? savedTheme === 'dark' : true;
+  });
+
+  // 테마 변경 시 localStorage에 저장 및 body 클래스 업데이트
+  useEffect(() => {
+    localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
+    document.body.className = isDarkMode ? 'dark-mode' : 'light-mode';
+  }, [isDarkMode]);
+
+  // 초기 테마 적용
+  useEffect(() => {
+    document.body.className = isDarkMode ? 'dark-mode' : 'light-mode';
+  }, []);
+
+  const toggleTheme = () => {
+    setIsDarkMode(prev => !prev);
+  };
 
   useEffect(() => {
     // 연결 상태
@@ -61,10 +82,40 @@ function App() {
       setQueue(data.queue);
       setIsPlaying(data.isPlaying);
       setIsAdmin(data.isAdmin || false);
+      setHasControl(data.hasControl || false);
+    });
+
+    // 제어권 상태 업데이트
+    socket.on('controlStatus', (data) => {
+      setHasControl(data.hasControl || false);
+    });
+
+    // 제어권 가져오기 성공
+    socket.on('controlGranted', (data) => {
+      setHasControl(true);
+      if (data.message) {
+        alert(data.message);
+      }
+    });
+
+    // 제어권 빼앗김
+    socket.on('controlTaken', (data) => {
+      setHasControl(false);
+      if (data.message) {
+        alert(data.message);
+      }
+    });
+
+    // 일괄 해제 완료
+    socket.on('allClientsDisconnected', (data) => {
+      if (data.count !== undefined) {
+        alert(`${data.count}개의 클라이언트 연결이 해제되었습니다.`);
+      }
     });
 
     // 음악 재생 중
     socket.on('musicPlaying', (music) => {
+      console.log('musicPlaying 이벤트 수신:', music);
       setCurrentPlaying(music);
       setIsPlaying(true);
     });
@@ -121,20 +172,66 @@ function App() {
   };
 
   const handlePlayNext = () => {
-    socket.emit('playNext');
+    console.log('다음 음악 재생 버튼 클릭', { isAdmin, hasControl });
+    if (isAdmin && hasControl) {
+      socket.emit('playNext');
+    } else {
+      console.warn('제어권이 없어 다음 음악 재생 불가', { isAdmin, hasControl });
+    }
+  };
+
+  const handlePauseMusic = () => {
+    socket.emit('pauseMusic');
+  };
+
+  const handleResumeMusic = () => {
+    socket.emit('resumeMusic');
   };
 
   const handleRemoveFromQueue = (musicId) => {
     socket.emit('removeFromQueue', musicId);
   };
 
+  const handleReorderQueue = (fromIndex, toIndex) => {
+    if (isAdmin && hasControl) {
+      socket.emit('reorderQueue', { fromIndex, toIndex });
+    }
+  };
+
+  const handleRequestControl = () => {
+    if (window.confirm('제어권을 가져오시겠습니까? 현재 제어권을 가진 세션에서 제어권이 이전됩니다.')) {
+      socket.emit('requestControl');
+    }
+  };
+
   return (
     <div className="App">
       <div className="container">
         <header className="header">
-          <h1>음악 선곡기</h1>
-          <div className={`connection-status ${isConnected ? 'connected' : 'disconnected'}`}>
-            {isConnected ? '연결됨' : '연결 끊김'}
+          <h1>Music Selector</h1>
+          <div className="header-right">
+            {isAdmin && (
+              <>
+                <div className={`control-status ${hasControl ? 'has-control' : 'no-control'}`}>
+                  {hasControl ? '제어권 있음' : '제어권 없음'}
+                </div>
+                {!hasControl && (
+                  <button onClick={handleRequestControl} className="request-control-btn">
+                    제어권 가져오기
+                  </button>
+                )}
+              </>
+            )}
+            <div className={`connection-status ${isConnected ? 'connected' : 'disconnected'}`}>
+              {isConnected ? '연결됨' : '연결 끊김'}
+            </div>
+            <button 
+              onClick={toggleTheme} 
+              className="theme-toggle-btn"
+              title={isDarkMode ? '라이트 모드로 전환' : '다크 모드로 전환'}
+            >
+              <span className="material-icons">{isDarkMode ? 'light_mode' : 'dark_mode'}</span>
+            </button>
           </div>
         </header>
 
@@ -149,7 +246,10 @@ function App() {
               music={currentPlaying} 
               isPlaying={isPlaying}
               onPlayNext={handlePlayNext}
+              onPause={handlePauseMusic}
+              onResume={handleResumeMusic}
               isAdmin={isAdmin}
+              hasControl={hasControl}
             />
           </div>
 
@@ -157,11 +257,14 @@ function App() {
             <QueueList 
               queue={queue} 
               onRemove={handleRemoveFromQueue}
+              onReorder={handleReorderQueue}
               isAdmin={isAdmin}
+              hasControl={hasControl}
             />
             <ClientList 
               socket={socket}
               isAdmin={isAdmin}
+              hasControl={hasControl}
             />
           </div>
         </div>

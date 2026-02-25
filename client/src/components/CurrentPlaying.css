@@ -1,11 +1,12 @@
 .current-playing {
-  background: #2a2a2a;
+  background: var(--bg-secondary);
   padding: 25px;
-  border: 1px solid #3a3a3a;
+  border: 1px solid var(--border-color);
+  transition: background-color 0.3s, border-color 0.3s;
 }
 
 .current-playing h2 {
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 20px;
   font-size: 1.5rem;
 }
@@ -13,7 +14,7 @@
 .no-music {
   text-align: center;
   padding: 40px;
-  color: #999999;
+  color: var(--text-secondary);
 }
 
 .music-card {
@@ -38,22 +39,23 @@
   position: absolute;
   top: 10px;
   right: 10px;
-  background: #1a1a1a;
-  color: #ffffff;
+  background: var(--bg-primary);
+  color: var(--text-primary);
   padding: 5px 15px;
-  border: 1px solid #3a3a3a;
+  border: 1px solid var(--border-color);
   font-size: 0.85rem;
   font-weight: 600;
+  transition: background-color 0.3s, border-color 0.3s, color 0.3s;
 }
 
 .music-info h3 {
-  color: #ffffff;
+  color: var(--text-primary);
   font-size: 1.2rem;
   margin-bottom: 8px;
 }
 
 .requested-by {
-  color: #999999;
+  color: var(--text-secondary);
   font-size: 0.9rem;
   margin-bottom: 15px;
 }
@@ -69,34 +71,121 @@
   border: none;
 }
 
-.next-btn {
+.player-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
   width: 100%;
-  padding: 12px;
-  background: #ffffff;
-  color: #1a1a1a;
-  border: 1px solid #3a3a3a;
-  font-size: 1rem;
-  font-weight: 600;
+  height: 100%;
   cursor: pointer;
+  z-index: 1;
+  background: transparent;
   transition: background 0.2s;
 }
 
+.player-overlay:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.player-placeholder {
+  width: 100%;
+  padding: 40px 20px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  text-align: center;
+  margin-bottom: 15px;
+  transition: background-color 0.3s, border-color 0.3s;
+}
+
+.player-placeholder p {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.next-btn {
+  width: 100%;
+  padding: 12px;
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
 .next-btn:hover {
-  background: #e0e0e0;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
 }
 
 .next-btn:active {
-  background: #cccccc;
+  background: var(--border-color);
+}
+
+.control-buttons {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.control-btn {
+  flex: 1;
+  padding: 12px;
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.control-btn:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.control-btn:active:not(:disabled) {
+  background: var(--border-color);
+}
+
+.control-btn:disabled {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.play-btn {
+  background: #4aff4a;
+  color: #1a1a1a;
+  border-color: #4aff4a;
+}
+
+.play-btn:hover {
+  background: #3aff3a;
+}
+
+.pause-btn {
+  background: #ff6b6b;
+  color: #ffffff;
+  border-color: #ff6b6b;
+}
+
+.pause-btn:hover {
+  background: #ff5252;
 }
 
 .next-btn.disabled {
-  background: #2a2a2a;
-  color: #666666;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
   cursor: not-allowed;
-  border-color: #3a3a3a;
+  border-color: var(--border-color);
 }
 
 .next-btn.disabled:hover {
-  background: #2a2a2a;
+  background: var(--bg-secondary);
 }
 

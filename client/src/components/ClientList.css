@@ -1,26 +1,55 @@
 .client-list {
-  background: #2a2a2a;
+  background: var(--bg-secondary);
   padding: 25px;
-  border: 1px solid #3a3a3a;
+  border: 1px solid var(--border-color);
   max-height: 60vh;
   overflow-y: auto;
+  transition: background-color 0.3s, border-color 0.3s;
+}
+
+.client-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  position: sticky;
+  top: 0;
+  background: var(--bg-secondary);
+  padding-bottom: 10px;
+  z-index: 1;
+  transition: background-color 0.3s;
 }
 
 .client-list h2 {
-  color: #ffffff;
-  margin-bottom: 20px;
+  color: var(--text-primary);
   font-size: 1.5rem;
-  position: sticky;
-  top: 0;
-  background: #2a2a2a;
-  padding-bottom: 10px;
-  z-index: 1;
+  margin: 0;
+}
+
+.disconnect-all-btn {
+  padding: 8px 16px;
+  background: #ff4444;
+  color: #ffffff;
+  border: 1px solid #ff4444;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.disconnect-all-btn:hover {
+  background: #cc3333;
+  border-color: #cc3333;
+}
+
+.disconnect-all-btn:active {
+  background: #aa2222;
 }
 
 .empty-clients {
   text-align: center;
   padding: 40px;
-  color: #999999;
+  color: var(--text-secondary);
 }
 
 .clients-items {
@@ -35,13 +64,13 @@
   align-items: flex-start;
   gap: 15px;
   padding: 15px;
-  background: #1a1a1a;
-  border: 1px solid #3a3a3a;
-  transition: background 0.2s;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  transition: background 0.2s, border-color 0.2s;
 }
 
 .client-item:hover {
-  background: #2a2a2a;
+  background: var(--bg-secondary);
 }
 
 .client-info {
@@ -64,19 +93,21 @@
 }
 
 .client-admin-badge.admin {
-  background: #1a1a1a;
+  background: var(--bg-primary);
   color: #4a9eff;
   border-color: #4a9eff;
+  transition: background-color 0.3s;
 }
 
 .client-admin-badge.user {
-  background: #1a1a1a;
-  color: #999999;
-  border-color: #666666;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  border-color: var(--border-color);
+  transition: background-color 0.3s, border-color 0.3s, color 0.3s;
 }
 
 .client-id {
-  color: #cccccc;
+  color: var(--text-secondary);
   font-size: 0.85rem;
   font-family: monospace;
 }
@@ -88,39 +119,40 @@
 }
 
 .client-details p {
-  color: #999999;
+  color: var(--text-secondary);
   font-size: 0.85rem;
   margin: 0;
   line-height: 1.4;
 }
 
 .client-ip {
-  color: #ffffff;
+  color: var(--text-primary);
   font-weight: 600;
 }
 
 .client-host {
-  color: #cccccc;
+  color: var(--text-secondary);
 }
 
 .client-time {
-  color: #999999;
+  color: var(--text-secondary);
 }
 
 .client-user-agent {
-  color: #666666;
+  color: var(--text-secondary);
   font-size: 0.75rem;
+  opacity: 0.7;
 }
 
 .disconnect-btn {
   padding: 8px 16px;
-  background: #2a2a2a;
-  color: #ffffff;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
   border: 1px solid #ff4444;
   font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background 0.2s, border-color 0.2s;
   flex-shrink: 0;
   white-space: nowrap;
 }

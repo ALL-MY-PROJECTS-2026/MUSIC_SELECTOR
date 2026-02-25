@@ -1,6 +1,8 @@
 .App {
   min-height: 100vh;
   padding: 20px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
 }
 
 .container {
@@ -12,35 +14,110 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: #2a2a2a;
+  background: var(--bg-secondary);
   padding: 20px 30px;
   margin-bottom: 30px;
-  border: 1px solid #3a3a3a;
+  border: 1px solid var(--border-color);
+  transition: background-color 0.3s, border-color 0.3s;
 }
 
 .header h1 {
-  color: #ffffff;
+  color: var(--text-primary);
   font-size: 2rem;
   font-weight: 700;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.control-status {
+  padding: 8px 16px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  border: 1px solid var(--border-color);
+  transition: background-color 0.3s, border-color 0.3s, color 0.3s;
+}
+
+.control-status.has-control {
+  background: var(--bg-secondary);
+  color: #4aff4a;
+  border-color: #4aff4a;
+}
+
+.control-status.no-control {
+  background: var(--bg-secondary);
+  color: #ff6b6b;
+  border-color: #ff6b6b;
+}
+
+.request-control-btn {
+  padding: 8px 16px;
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.request-control-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.request-control-btn:active {
+  background: var(--border-color);
 }
 
 .connection-status {
   padding: 8px 16px;
   font-size: 0.9rem;
   font-weight: 600;
-  border: 1px solid #3a3a3a;
+  border: 1px solid var(--border-color);
+  transition: background-color 0.3s, border-color 0.3s, color 0.3s;
 }
 
 .connection-status.connected {
-  background: #2a2a2a;
+  background: var(--bg-secondary);
   color: #4a9eff;
   border-color: #4a9eff;
 }
 
 .connection-status.disconnected {
-  background: #2a2a2a;
-  color: #999999;
-  border-color: #666666;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  border-color: var(--border-color);
+}
+
+.theme-toggle-btn {
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+}
+
+.theme-toggle-btn .material-icons {
+  font-size: 24px;
+}
+
+.theme-toggle-btn:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--border-hover);
+}
+
+.theme-toggle-btn:active {
+  background: var(--border-color);
 }
 
 .main-content {
@@ -53,6 +130,9 @@
   display: flex;
   flex-direction: column;
   gap: 20px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 @media (max-width: 968px) {
