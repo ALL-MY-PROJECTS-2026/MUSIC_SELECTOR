@@ -214,7 +214,7 @@ function App() {
     <div className="App">
       <div className="container">
         <header className="header">
-          <h1>Music Selector</h1>
+          <h1>JUNG'S PLAY HUB</h1>
           <div className="header-right">
             {isAdmin && (
               <>
