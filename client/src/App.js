@@ -142,6 +142,11 @@ function App() {
       setQueue(updatedQueue);
     });
 
+    // musicEnded 이벤트 수신 확인 (서버에서 전송)
+    socket.on('musicEndedReceived', (data) => {
+      console.log('[App] 서버에서 musicEnded 이벤트 수신 확인:', data);
+    });
+
     // 에러 처리
     socket.on('error', (error) => {
       alert(error.message);
@@ -154,6 +159,7 @@ function App() {
       socket.off('musicPlaying');
       socket.off('musicStopped');
       socket.off('queueUpdated');
+      socket.off('musicEndedReceived');
       socket.off('error');
     };
   }, []);

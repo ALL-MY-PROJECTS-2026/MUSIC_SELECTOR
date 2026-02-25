@@ -167,8 +167,19 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
               // 중복 전송 방지 및 제어권 확인
               if (!endedSentRef.current && window.socket && hasControl) {
                 endedSentRef.current = true;
-                console.log('음악 재생 종료 - 서버에 알림 (제어권 보유)');
+                console.log('음악 재생 종료 감지 - 서버에 알림 (제어권 보유)', {
+                  videoId: music?.videoId,
+                  title: music?.title,
+                  socketConnected: window.socket?.connected
+                });
                 window.socket.emit('musicEnded');
+                console.log('musicEnded 이벤트 전송 완료');
+              } else {
+                console.log('musicEnded 이벤트 전송 건너뜀', {
+                  endedSent: endedSentRef.current,
+                  hasSocket: !!window.socket,
+                  hasControl: hasControl
+                });
               }
             }
             // 재생 중이면 플래그 리셋 (일시정지 시간은 재생 시작 후 초기화)

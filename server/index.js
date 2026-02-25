@@ -202,25 +202,38 @@ io.on('connection', (socket) => {
     }
   });
 
-  // 재생 종료 알림 (클라이언트에서 감지)
+  // 재생 종료 알림 (클라이언트에서 감지) - 재생 불가능한 동영상 감지 시 즉시 처리
   socket.on('musicEnded', () => {
-    console.log(`음악 재생 종료 감지 (클라이언트: ${socket.id.slice(0, 8)})`, { 
-      isProcessingNext, 
-      isPlaying, 
+    console.log(`[musicEnded] 음악 재생 종료 알림 수신 (클라이언트: ${socket.id.slice(0, 8)})`, {
+      isProcessingNext,
+      isPlaying,
       currentPlaying: currentPlaying?.title,
+      currentPlayingId: currentPlaying?.id,
+      queueLength: queueManager.getQueue().length,
+      hasAutoTimer: !!autoPlayTimer
+    });
+    
+    // 클라이언트에 이벤트 수신 확인 전송
+    socket.emit('musicEndedReceived', { 
+      received: true,
       queueLength: queueManager.getQueue().length 
     });
     
-    // 중복 처리 방지: 이미 처리 중이면 무시
+    // 중복 처리 방지
     if (isProcessingNext) {
-      console.log('이미 다음 곡 처리 중 - 무시');
+      console.log('[musicEnded] 이미 다음 곡 처리 중 - 무시');
       return;
     }
     
     // 대기열이 비어있으면 상태만 초기화
     const queue = queueManager.getQueue();
     if (queue.length === 0) {
-      console.log('대기열이 비어있음 - 상태 초기화');
+      console.log('[musicEnded] 대기열이 비어있음 - 상태 초기화');
+      // 타이머 정리
+      if (autoPlayTimer) {
+        clearTimeout(autoPlayTimer);
+        autoPlayTimer = null;
+      }
       isProcessingNext = false;
       currentPlaying = null;
       isPlaying = false;
@@ -231,20 +244,22 @@ io.on('connection', (socket) => {
       return;
     }
     
-    // 대기열이 있으면 다음 곡 재생
-    console.log(`다음 곡 자동 재생 시작 (대기열: ${queue.length}개)`);
-    isProcessingNext = true;
+    // 대기열이 있으면 즉시 다음 곡 재생 (재생 불가능한 동영상이거나 타이머가 작동하지 않은 경우)
+    console.log(`[musicEnded] 재생 종료 감지 - 즉시 다음 곡 재생 (대기열: ${queue.length}개)`);
+    console.log(`[musicEnded] 대기열 내용:`, queue.map(m => ({ id: m.id, title: m.title })));
     
-    // 타이머 정리 (백업 타이머 취소)
+    // 타이머 정리
     if (autoPlayTimer) {
+      console.log('[musicEnded] 기존 타이머 정리');
       clearTimeout(autoPlayTimer);
       autoPlayTimer = null;
     }
     
-    // 다음 곡 재생 (playNextMusic 내부에서 isProcessingNext 리셋)
-    setTimeout(() => {
-      playNextMusic();
-    }, 500); // 0.5초 후 재생 (부드러운 전환)
+    // playNextMusic 내부에서 isProcessingNext를 설정하므로 여기서는 설정하지 않음
+    // setTimeout 제거하고 즉시 호출
+    console.log('[musicEnded] playNextMusic 호출 시작');
+    playNextMusic();
+    console.log('[musicEnded] playNextMusic 호출 완료');
   });
 
   // 재생 중지 요청 (제어권 있는 관리자만 가능)
@@ -466,10 +481,11 @@ io.on('connection', (socket) => {
 
 // 재생 시작 함수
 function startPlaying(music) {
-  console.log('startPlaying 호출됨:', music ? music.title : 'null');
+  console.log('[startPlaying] 함수 호출됨:', music ? { id: music.id, title: music.title } : 'null');
   
   // 이전 타이머 정리
   if (autoPlayTimer) {
+    console.log('[startPlaying] 기존 타이머 정리');
     clearTimeout(autoPlayTimer);
     autoPlayTimer = null;
   }
@@ -478,6 +494,11 @@ function startPlaying(music) {
   isPlaying = true;
   isProcessingNext = false;
   playStartTime = Date.now();
+  console.log('[startPlaying] 상태 설정 완료:', {
+    currentPlayingId: currentPlaying?.id,
+    isPlaying,
+    isProcessingNext
+  });
   
   // 재생 시간 파싱 (예: "3:45" -> 225초)
   if (music.duration && typeof music.duration === 'string') {
@@ -503,56 +524,80 @@ function startPlaying(music) {
   
   console.log(`재생 시작: ${currentPlaying.title} (재생 시간: ${musicDuration ? musicDuration + '초' : '알 수 없음'})`);
   
-  // 재생 시간이 있으면 자동으로 다음 곡 재생 (백업용 - 클라이언트에서 감지 실패 시)
-  if (musicDuration && musicDuration > 0) {
-    autoPlayTimer = setTimeout(() => {
-      // 중복 처리 방지: 이미 처리 중이거나 다른 곡이 재생 중이면 무시
-      if (!isProcessingNext && currentPlaying && currentPlaying.id === music.id && isPlaying) {
-        console.log('자동 재생 시간 초과 - 다음 곡 재생 (백업)');
-        isProcessingNext = true;
-        // playNextMusic 내부에서 isProcessingNext 리셋
-        playNextMusic();
-      } else {
-        // 이미 처리되었거나 다른 곡이 재생 중이면 타이머만 정리
-        console.log('백업 타이머 무시 (이미 처리됨 또는 다른 곡 재생 중)');
-      }
-    }, (musicDuration + 3) * 1000); // 3초 여유 (클라이언트 감지보다 늦게)
-  }
+  // 서버에서 자동으로 다음 곡 재생 (제어권 있는 서버에서만 처리)
+  // 재생 시간이 있으면 해당 시간 후 자동 재생, 없으면 기본 5분 후 재생
+  const playDuration = musicDuration && musicDuration > 0 ? musicDuration : 300; // 기본 5분
+  const timerDuration = (playDuration + 2) * 1000; // 재생 시간 + 2초 여유 (밀리초)
+  console.log(`서버 자동 재생 타이머 설정: ${playDuration}초 후 다음 곡 재생 (${timerDuration}ms)`);
+  
+  autoPlayTimer = setTimeout(() => {
+    console.log('서버 타이머 실행:', { 
+      isProcessingNext, 
+      currentPlayingId: currentPlaying?.id, 
+      musicId: music.id, 
+      isPlaying,
+      queueLength: queueManager.getQueue().length
+    });
+    
+    // 중복 처리 방지: 이미 처리 중이거나 다른 곡이 재생 중이면 무시
+    if (!isProcessingNext && currentPlaying && currentPlaying.id === music.id && isPlaying) {
+      console.log('서버 타이머: 자동 재생 시간 초과 - 다음 곡 재생');
+      isProcessingNext = true;
+      // playNextMusic 내부에서 isProcessingNext 리셋
+      playNextMusic();
+    } else {
+      // 이미 처리되었거나 다른 곡이 재생 중이면 타이머만 정리
+      console.log('서버 타이머 무시:', { 
+        isProcessingNext, 
+        currentPlayingId: currentPlaying?.id, 
+        musicId: music.id, 
+        isPlaying 
+      });
+    }
+  }, timerDuration);
 }
 
 // 다음 음악 재생 함수
 function playNextMusic() {
   const queue = queueManager.getQueue();
-  console.log('playNextMusic 호출됨', { isProcessingNext, currentPlaying: currentPlaying?.title, queueLength: queue.length });
+  console.log('[playNextMusic] 함수 호출됨', { 
+    isProcessingNext, 
+    currentPlaying: currentPlaying?.title,
+    currentPlayingId: currentPlaying?.id,
+    queueLength: queue.length 
+  });
   
   // 중복 호출 방지: 이미 처리 중이면 무시
   if (isProcessingNext) {
-    console.log('playNextMusic 중복 호출 방지 (이미 처리 중)');
+    console.log('[playNextMusic] 중복 호출 방지 (이미 처리 중)');
     return;
   }
   
   // 플래그 설정 (중복 방지)
   isProcessingNext = true;
+  console.log('[playNextMusic] isProcessingNext = true 설정');
   
   // 타이머 정리 (백업 타이머 취소)
   if (autoPlayTimer) {
+    console.log('[playNextMusic] 기존 타이머 정리');
     clearTimeout(autoPlayTimer);
     autoPlayTimer = null;
   }
   
-  console.log('현재 대기열:', queue.map(m => m.title));
+  console.log('[playNextMusic] 현재 대기열:', queue.map(m => ({ id: m.id, title: m.title })));
   const nextMusic = queueManager.getNextMusic();
-  console.log('다음 음악:', nextMusic ? nextMusic.title : '없음');
+  console.log('[playNextMusic] 다음 음악:', nextMusic ? { id: nextMusic.id, title: nextMusic.title } : '없음');
   
   if (nextMusic) {
     queueManager.removeFromQueue(nextMusic.id);
-    console.log('대기열에서 제거 후:', queueManager.getQueue().map(m => m.title));
+    console.log('[playNextMusic] 대기열에서 제거 후:', queueManager.getQueue().map(m => ({ id: m.id, title: m.title })));
+    console.log('[playNextMusic] startPlaying 호출 시작:', nextMusic.title);
     startPlaying(nextMusic); // startPlaying 내부에서 isProcessingNext = false로 리셋
     io.emit('queueUpdated', queueManager.getQueue());
-    console.log(`다음 곡으로 전환: ${nextMusic.title}`);
+    console.log(`[playNextMusic] 다음 곡으로 전환 완료: ${nextMusic.title}`);
   } else {
     // 재생할 음악이 없으면 상태 초기화
-    console.log('재생할 음악이 없어서 상태 초기화');
+    console.log('[playNextMusic] 재생할 음악이 없어서 상태 초기화');
     currentPlaying = null;
     isPlaying = false;
     playStartTime = null;
@@ -560,7 +605,7 @@ function playNextMusic() {
     isProcessingNext = false; // 플래그 리셋 (중요: 대기열에 곡이 추가되면 재생 가능하도록)
     io.emit('musicStopped');
     io.emit('queueUpdated', queueManager.getQueue());
-    console.log('재생할 음악이 없습니다. 대기열에 곡이 추가되면 자동 재생됩니다.');
+    console.log('[playNextMusic] 재생할 음악이 없습니다. 대기열에 곡이 추가되면 자동 재생됩니다.');
   }
 }
 
