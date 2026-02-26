@@ -37,6 +37,9 @@ const connectedClients = new Map(); // socketId -> clientInfo
 // 제어권 관리 (하나의 세션만 제어권 보유)
 let controlSessionId = null; // 제어권을 가진 세션 ID
 
+// 관리자 패스워드 (환경 변수 또는 기본값)
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
+
 // Socket.io 연결 처리
 io.on('connection', (socket) => {
   console.log('새 클라이언트 연결:', socket.id);
@@ -61,38 +64,11 @@ io.on('connection', (socket) => {
                       referer.includes('localhost') ||
                       referer.includes('127.0.0.1');
   
-  // 관리자 권한 확인 (localhost 접속만 관리자)
-  const isAdmin = isLocalhost;
+  // 관리자 권한 확인 (기본적으로 false, 인증 후 true로 변경)
+  const isAdmin = false;
   
-  // 제어권 확인 (관리자 중 첫 번째 접속자에게 제어권 부여)
-  let hasControl = false;
-  if (isAdmin) {
-    if (!controlSessionId) {
-      // 제어권이 없으면 이 세션에 부여
-      controlSessionId = socket.id;
-      hasControl = true;
-      console.log(`제어권 부여: ${socket.id}`, {
-        socketId: socket.id,
-        isAdmin: isAdmin,
-        currentControlSessionId: controlSessionId
-      });
-    } else if (controlSessionId === socket.id) {
-      // 이미 제어권을 가진 세션이면 유지
-      hasControl = true;
-      console.log(`제어권 유지: ${socket.id}`, {
-        socketId: socket.id,
-        controlSessionId: controlSessionId
-      });
-    } else {
-      // 다른 세션이 제어권을 가지고 있으면 제어권 없음
-      hasControl = false;
-      console.log(`제어권 없음 (다른 세션이 제어 중): ${socket.id}`, {
-        socketId: socket.id,
-        currentControlSessionId: controlSessionId,
-        connectedClients: Array.from(connectedClients.keys())
-      });
-    }
-  }
+  // 제어권 확인 (기본적으로 제어권 없음, 인증 후 부여)
+  const hasControl = false;
   
   console.log(`클라이언트 IP: ${clientIP}, Host: ${hostHeader}, 관리자: ${isAdmin}, 제어권: ${hasControl}`);
 
@@ -125,25 +101,8 @@ io.on('connection', (socket) => {
   });
 
   // 재연결 시 자동 재생 체크 (제어권 부여 후)
-  if (hasControl && isAdmin) {
-    const queue = queueManager.getQueue();
-    // 대기열에 곡이 있고 재생 중이 아니면 자동 재생
-    if (queue.length > 0 && !isPlaying) {
-      console.log(`[connection] 재연결 시 자동 재생 체크: 대기열 ${queue.length}개, isPlaying=${isPlaying}`);
-      console.log(`[connection] 자동 재생 시작 (재연결 후)`);
-      // 약간의 지연을 두어 클라이언트가 상태를 받은 후 재생
-      setTimeout(() => {
-        playNextMusic();
-      }, 500);
-    } else if (queue.length > 0 && isPlaying && !currentPlaying) {
-      // 재생 중이라고 표시되어 있지만 실제 재생 중인 곡이 없으면 재생
-      console.log(`[connection] 재연결 시 상태 불일치 감지: isPlaying=true지만 currentPlaying=null`);
-      console.log(`[connection] 자동 재생 시작 (상태 불일치 복구)`);
-      setTimeout(() => {
-        playNextMusic();
-      }, 500);
-    }
-  }
+  // 인증 후에만 자동 재생 체크 (현재는 제어권이 없으므로 스킵)
+  // 인증 성공 후 재연결 시 자동 재생은 authenticate 이벤트에서 처리
 
   // 음악 검색 이벤트 (검색 결과만 반환)
   socket.on('searchMusic', async (data) => {
@@ -352,7 +311,8 @@ io.on('connection', (socket) => {
 
   // 재생 중지 요청 (제어권 있는 관리자만 가능)
   socket.on('pauseMusic', () => {
-    if (isAdmin && controlSessionId === socket.id) {
+    const clientInfo = connectedClients.get(socket.id);
+    if (clientInfo && clientInfo.isAdmin && controlSessionId === socket.id) {
       isPlaying = false;
       io.emit('musicPaused');
       console.log('음악 일시정지 (제어권 보유자)');
@@ -363,7 +323,8 @@ io.on('connection', (socket) => {
 
   // 재생 시작 요청 (제어권 있는 관리자만 가능)
   socket.on('resumeMusic', () => {
-    if (isAdmin && controlSessionId === socket.id) {
+    const clientInfo = connectedClients.get(socket.id);
+    if (clientInfo && clientInfo.isAdmin && controlSessionId === socket.id) {
       if (currentPlaying) {
         isPlaying = true;
         io.emit('musicResumed', currentPlaying);
@@ -376,25 +337,28 @@ io.on('connection', (socket) => {
 
   // 다음 음악 재생 요청 (제어권 있는 관리자만 가능)
   socket.on('playNext', () => {
+    const clientInfo = connectedClients.get(socket.id);
+    const isAdminUser = clientInfo && clientInfo.isAdmin;
     console.log(`다음 음악 재생 요청 받음`, { 
       socketId: socket.id.slice(0, 8), 
-      isAdmin, 
+      isAdmin: isAdminUser, 
       hasControl: controlSessionId === socket.id,
       controlSessionId: controlSessionId?.slice(0, 8)
     });
     
-    if (isAdmin && controlSessionId === socket.id) {
+    if (isAdminUser && controlSessionId === socket.id) {
       console.log(`다음 음악 재생 요청 승인 (제어권 보유자: ${socket.id.slice(0, 8)})`);
       playNextMusic();
     } else {
-      console.log(`다음 음악 재생 요청 거부 (관리자: ${isAdmin}, 제어권: ${controlSessionId === socket.id})`);
+      console.log(`다음 음악 재생 요청 거부 (관리자: ${isAdminUser}, 제어권: ${controlSessionId === socket.id})`);
       socket.emit('error', { message: '제어권이 없습니다. 제어권을 가진 세션에서만 다음 음악 재생이 가능합니다.' });
     }
   });
 
   // 대기열에서 삭제 (제어권 있는 관리자만 가능)
   socket.on('removeFromQueue', (musicId) => {
-    if (isAdmin && controlSessionId === socket.id) {
+    const clientInfo = connectedClients.get(socket.id);
+    if (clientInfo && clientInfo.isAdmin && controlSessionId === socket.id) {
       queueManager.removeFromQueue(musicId);
       io.emit('queueUpdated', queueManager.getQueue());
       console.log(`대기열에서 제거됨 (제어권 보유자): ${musicId}`);
@@ -405,7 +369,8 @@ io.on('connection', (socket) => {
 
   // 대기열 순서 변경 (제어권 있는 관리자만 가능)
   socket.on('reorderQueue', (data) => {
-    if (isAdmin && controlSessionId === socket.id) {
+    const clientInfo = connectedClients.get(socket.id);
+    if (clientInfo && clientInfo.isAdmin && controlSessionId === socket.id) {
       const { fromIndex, toIndex } = data;
       const success = queueManager.reorderQueue(fromIndex, toIndex);
       if (success) {
@@ -419,9 +384,84 @@ io.on('connection', (socket) => {
     }
   });
 
+  // 패스워드 인증 요청
+  socket.on('authenticate', (data) => {
+    const { password } = data;
+    const clientInfo = connectedClients.get(socket.id);
+    
+    if (!clientInfo) {
+      socket.emit('authenticationFailed', { message: '클라이언트 정보를 찾을 수 없습니다.' });
+      return;
+    }
+    
+    if (password === ADMIN_PASSWORD) {
+      // 인증 성공
+      clientInfo.isAdmin = true;
+      
+      // 제어권 이전 (다른 세션에서 제어권을 가지고 있으면 이전)
+      if (controlSessionId && controlSessionId !== socket.id) {
+        const previousController = connectedClients.get(controlSessionId);
+        if (previousController) {
+          previousController.hasControl = false;
+          const prevSocket = io.sockets.sockets.get(controlSessionId);
+          if (prevSocket) {
+            prevSocket.emit('controlStatus', { hasControl: false });
+            prevSocket.emit('controlTaken', { 
+              message: '다른 위치에서 인증이 완료되어 제어권이 이동되었습니다.' 
+            });
+          }
+        }
+      }
+      
+      // 새 제어권 부여
+      controlSessionId = socket.id;
+      clientInfo.hasControl = true;
+      
+      socket.emit('authenticationSuccess', { 
+        message: '인증이 완료되었습니다. 제어권을 획득했습니다.',
+        hasControl: true,
+        isAdmin: true
+      });
+      socket.emit('controlStatus', { hasControl: true });
+      // controlGranted는 인증과 별도로 제어권만 가져올 때만 전송 (중복 방지)
+      
+      console.log(`인증 성공 및 제어권 부여: ${socket.id}`);
+      
+      // 모든 관리자에게 제어권 상태 업데이트
+      broadcastControlStatus();
+      broadcastClientList();
+      
+      // 재연결 시 자동 재생 체크 (제어권 부여 후)
+      const queue = queueManager.getQueue();
+      // 대기열에 곡이 있고 재생 중이 아니면 자동 재생
+      if (queue.length > 0 && !isPlaying) {
+        console.log(`[authenticate] 인증 후 자동 재생 체크: 대기열 ${queue.length}개, isPlaying=${isPlaying}`);
+        console.log(`[authenticate] 자동 재생 시작 (인증 후)`);
+        // 약간의 지연을 두어 클라이언트가 상태를 받은 후 재생
+        setTimeout(() => {
+          playNextMusic();
+        }, 500);
+      } else if (queue.length > 0 && isPlaying && !currentPlaying) {
+        // 재생 중이라고 표시되어 있지만 실제 재생 중인 곡이 없으면 재생
+        console.log(`[authenticate] 인증 후 상태 불일치 감지: isPlaying=true지만 currentPlaying=null`);
+        console.log(`[authenticate] 자동 재생 시작 (상태 불일치 복구)`);
+        setTimeout(() => {
+          playNextMusic();
+        }, 500);
+      }
+    } else {
+      // 인증 실패
+      socket.emit('authenticationFailed', { 
+        message: '패스워드가 올바르지 않습니다.' 
+      });
+      console.log(`인증 실패: ${socket.id}`);
+    }
+  });
+
   // 제어권 가져오기 요청 (관리자만 가능)
   socket.on('requestControl', () => {
-    if (!isAdmin) {
+    const clientInfo = connectedClients.get(socket.id);
+    if (!clientInfo || !clientInfo.isAdmin) {
       socket.emit('error', { message: '관리자만 제어권을 가져올 수 있습니다.' });
       return;
     }
@@ -458,7 +498,8 @@ io.on('connection', (socket) => {
 
   // 클라이언트 목록 조회 (관리자만 가능)
   socket.on('getClientList', () => {
-    if (isAdmin) {
+    const clientInfo = connectedClients.get(socket.id);
+    if (clientInfo && clientInfo.isAdmin) {
       // 각 클라이언트에 hasControl 정보 추가
       const clientList = Array.from(connectedClients.values()).map(clientInfo => ({
         ...clientInfo,
@@ -472,7 +513,8 @@ io.on('connection', (socket) => {
 
   // 클라이언트 강제 연결 해제 (관리자만 가능)
   socket.on('disconnectClient', (targetSocketId) => {
-    if (isAdmin) {
+    const clientInfo = connectedClients.get(socket.id);
+    if (clientInfo && clientInfo.isAdmin) {
       const targetSocket = io.sockets.sockets.get(targetSocketId);
       if (targetSocket) {
         targetSocket.disconnect(true);
@@ -490,9 +532,11 @@ io.on('connection', (socket) => {
 
   // 일괄 연결 해제 (제어권 있는 관리자만 가능, 제어권 있는 세션 제외 - 관리자 포함 모두 해제)
   socket.on('disconnectAllExceptController', () => {
-    console.log(`일괄 해제 요청 (요청자: ${socket.id.slice(0, 8)}, 관리자: ${isAdmin}, 제어권: ${controlSessionId === socket.id})`);
+    const clientInfo = connectedClients.get(socket.id);
+    const isAdminUser = clientInfo && clientInfo.isAdmin;
+    console.log(`일괄 해제 요청 (요청자: ${socket.id.slice(0, 8)}, 관리자: ${isAdminUser}, 제어권: ${controlSessionId === socket.id})`);
     
-    if (isAdmin && controlSessionId === socket.id) {
+    if (isAdminUser && controlSessionId === socket.id) {
       let disconnectedCount = 0;
       let adminDisconnectedCount = 0;
       let userDisconnectedCount = 0;
@@ -563,7 +607,7 @@ io.on('connection', (socket) => {
       // 다른 관리자 중 첫 번째에게 제어권 부여
       let controlTransferred = false;
       for (const [socketId, clientInfo] of connectedClients.entries()) {
-        if (clientInfo.isAdmin && socketId !== socket.id) {
+        if (clientInfo && clientInfo.isAdmin && socketId !== socket.id) {
           const targetSocket = io.sockets.sockets.get(socketId);
           if (targetSocket) {
             controlSessionId = socketId;

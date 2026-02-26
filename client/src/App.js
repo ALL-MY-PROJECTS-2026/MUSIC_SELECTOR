@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import io from 'socket.io-client';
 import './App.css';
 import MusicRequestForm from './components/MusicRequestForm';
@@ -43,6 +43,9 @@ function App() {
   const [isConnected, setIsConnected] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [hasControl, setHasControl] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authPassword, setAuthPassword] = useState('');
+  const authSuccessRef = useRef(false); // 인증 성공 중복 알림 방지
   const [isDarkMode, setIsDarkMode] = useState(() => {
     // localStorage에서 테마 설정 불러오기 (기본값: 다크모드)
     const savedTheme = localStorage.getItem('theme');
@@ -85,17 +88,19 @@ function App() {
       setHasControl(data.hasControl || false);
     });
 
-    // 제어권 상태 업데이트
+    // 제어권 상태 업데이트 (알림 없이 상태만 업데이트)
     socket.on('controlStatus', (data) => {
       setHasControl(data.hasControl || false);
     });
 
-    // 제어권 가져오기 성공
+    // 제어권 가져오기 성공 (인증과 별도로 제어권만 가져올 때)
     socket.on('controlGranted', (data) => {
       setHasControl(true);
-      if (data.message) {
+      // 인증 성공이 아닌 경우에만 알림 (인증 성공 시에는 중복 알림 방지)
+      if (data.message && !authSuccessRef.current) {
         alert(data.message);
       }
+      authSuccessRef.current = false; // 플래그 리셋
     });
 
     // 제어권 빼앗김
@@ -104,6 +109,28 @@ function App() {
       if (data.message) {
         alert(data.message);
       }
+    });
+
+    // 인증 성공
+    socket.on('authenticationSuccess', (data) => {
+      authSuccessRef.current = true; // 인증 성공 플래그 설정
+      setIsAdmin(true);
+      setHasControl(data.hasControl || false);
+      setShowAuthModal(false);
+      setAuthPassword('');
+      // 인증 성공 메시지만 표시 (제어권 관련 메시지는 제외)
+      if (data.message) {
+        alert(data.message);
+      }
+      // 플래그는 controlGranted 이벤트에서 리셋됨
+    });
+
+    // 인증 실패
+    socket.on('authenticationFailed', (data) => {
+      if (data.message) {
+        alert(data.message);
+      }
+      setAuthPassword('');
     });
 
     // 일괄 해제 완료
@@ -156,8 +183,16 @@ function App() {
       socket.off('connect');
       socket.off('disconnect');
       socket.off('currentState');
+      socket.off('controlStatus');
+      socket.off('controlGranted');
+      socket.off('controlTaken');
+      socket.off('authenticationSuccess');
+      socket.off('authenticationFailed');
+      socket.off('allClientsDisconnected');
       socket.off('musicPlaying');
       socket.off('musicStopped');
+      socket.off('musicPaused');
+      socket.off('musicResumed');
       socket.off('queueUpdated');
       socket.off('musicEndedReceived');
       socket.off('error');
@@ -210,12 +245,34 @@ function App() {
     }
   };
 
+  const handleOpenAuthModal = () => {
+    setShowAuthModal(true);
+    setAuthPassword('');
+  };
+
+  const handleCloseAuthModal = () => {
+    setShowAuthModal(false);
+    setAuthPassword('');
+  };
+
+  const handleAuthSubmit = (e) => {
+    e.preventDefault();
+    if (authPassword.trim()) {
+      socket.emit('authenticate', { password: authPassword });
+    }
+  };
+
   return (
     <div className="App">
       <div className="container">
         <header className="header">
-          <h1>JUNG'S PLAY HUB</h1>
+          <h1>SOUND HUB</h1>
           <div className="header-right">
+            {!isAdmin && (
+              <button onClick={handleOpenAuthModal} className="auth-btn">
+                인증
+              </button>
+            )}
             {isAdmin && (
               <>
                 <div className={`control-status ${hasControl ? 'has-control' : 'no-control'}`}>
@@ -240,6 +297,41 @@ function App() {
             </button>
           </div>
         </header>
+
+        {/* 인증 모달 */}
+        {showAuthModal && (
+          <div className="modal-overlay" onClick={handleCloseAuthModal}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <h2>관리자 인증</h2>
+                <button className="modal-close-btn" onClick={handleCloseAuthModal}>
+                  <span className="material-icons">close</span>
+                </button>
+              </div>
+              <form onSubmit={handleAuthSubmit} className="auth-form">
+                <div className="form-group">
+                  <label htmlFor="password">패스워드</label>
+                  <input
+                    type="password"
+                    id="password"
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    placeholder="패스워드를 입력하세요"
+                    autoFocus
+                  />
+                </div>
+                <div className="form-actions">
+                  <button type="button" onClick={handleCloseAuthModal} className="btn-cancel">
+                    취소
+                  </button>
+                  <button type="submit" className="btn-submit">
+                    인증
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
 
         <div className="main-content">
           <div className="left-panel">

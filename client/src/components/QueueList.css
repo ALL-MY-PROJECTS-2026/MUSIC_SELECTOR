@@ -135,3 +135,105 @@
   background: var(--border-color);
 }
 
+/* 태블릿 및 작은 화면 */
+@media (max-width: 768px) {
+  .queue-list {
+    padding: 20px;
+    max-height: 70vh;
+  }
+  
+  .queue-list h2 {
+    font-size: 1.3rem;
+    margin-bottom: 15px;
+  }
+  
+  .queue-item {
+    padding: 12px;
+    gap: 12px;
+  }
+  
+  .queue-number {
+    min-width: 25px;
+    height: 25px;
+    font-size: 0.85rem;
+  }
+  
+  .queue-thumbnail {
+    width: 50px;
+    height: 50px;
+  }
+  
+  .queue-info h4 {
+    font-size: 0.95rem;
+  }
+  
+  .queue-requested-by {
+    font-size: 0.8rem;
+  }
+  
+  .remove-btn {
+    width: 28px;
+    height: 28px;
+    font-size: 1.1rem;
+  }
+}
+
+/* 모바일 화면 */
+@media (max-width: 480px) {
+  .queue-list {
+    padding: 15px;
+    max-height: 60vh;
+  }
+  
+  .queue-list h2 {
+    font-size: 1.1rem;
+    margin-bottom: 12px;
+  }
+  
+  .empty-queue {
+    padding: 30px 20px;
+    font-size: 0.9rem;
+  }
+  
+  .queue-items {
+    gap: 10px;
+  }
+  
+  .queue-item {
+    padding: 10px;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  
+  .queue-number {
+    min-width: 24px;
+    height: 24px;
+    font-size: 0.8rem;
+  }
+  
+  .queue-thumbnail {
+    width: 45px;
+    height: 45px;
+  }
+  
+  .queue-info {
+    flex: 1;
+    min-width: 150px;
+  }
+  
+  .queue-info h4 {
+    font-size: 0.9rem;
+    margin-bottom: 4px;
+  }
+  
+  .queue-requested-by {
+    font-size: 0.75rem;
+  }
+  
+  .remove-btn {
+    width: 26px;
+    height: 26px;
+    font-size: 1rem;
+  }
+}
+

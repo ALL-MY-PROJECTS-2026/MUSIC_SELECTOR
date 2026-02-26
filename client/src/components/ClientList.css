@@ -166,3 +166,108 @@
   background: #cc3333;
 }
 
+/* 태블릿 및 작은 화면 */
+@media (max-width: 768px) {
+  .client-list {
+    padding: 20px;
+    max-height: 50vh;
+  }
+  
+  .client-list h2 {
+    font-size: 1.3rem;
+  }
+  
+  .client-list-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  
+  .disconnect-all-btn {
+    width: 100%;
+    text-align: center;
+  }
+  
+  .client-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  
+  .client-info {
+    width: 100%;
+  }
+  
+  .disconnect-btn {
+    width: 100%;
+    text-align: center;
+  }
+}
+
+/* 모바일 화면 */
+@media (max-width: 480px) {
+  .client-list {
+    padding: 15px;
+    max-height: 45vh;
+  }
+  
+  .client-list h2 {
+    font-size: 1.1rem;
+  }
+  
+  .client-list-header {
+    margin-bottom: 15px;
+    gap: 10px;
+  }
+  
+  .disconnect-all-btn {
+    font-size: 0.85rem;
+    padding: 6px 12px;
+  }
+  
+  .empty-clients {
+    padding: 30px 20px;
+    font-size: 0.9rem;
+  }
+  
+  .clients-items {
+    gap: 10px;
+  }
+  
+  .client-item {
+    padding: 12px;
+    gap: 10px;
+  }
+  
+  .client-header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  
+  .client-admin-badge {
+    font-size: 0.7rem;
+    padding: 3px 8px;
+  }
+  
+  .client-id {
+    font-size: 0.8rem;
+  }
+  
+  .client-details {
+    gap: 4px;
+  }
+  
+  .client-details p {
+    font-size: 0.8rem;
+  }
+  
+  .client-user-agent {
+    font-size: 0.7rem;
+  }
+  
+  .disconnect-btn {
+    font-size: 0.85rem;
+    padding: 6px 12px;
+  }
+}
+

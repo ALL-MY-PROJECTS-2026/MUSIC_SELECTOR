@@ -35,9 +35,35 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
     };
   }, []);
 
+  // 제어권이 없을 때 플레이어 제거 (React DOM 조작 후 실행)
+  useEffect(() => {
+    if (!hasControl && youtubePlayerRef.current) {
+      console.log('제어권 상실 - 플레이어 제거 예약');
+      // React의 DOM 조작이 완료된 후 플레이어 제거 (다음 이벤트 루프에서 실행)
+      const timeoutId = setTimeout(() => {
+        if (youtubePlayerRef.current) {
+          try {
+            console.log('제어권 상실 - 플레이어 제거 실행');
+            youtubePlayerRef.current.destroy();
+          } catch (e) {
+            // 이미 제거되었거나 오류가 발생해도 무시
+            console.log('플레이어 제거 중 오류 (무시):', e);
+          }
+          youtubePlayerRef.current = null;
+          setPlayerReady(false);
+        }
+      }, 0);
+      
+      return () => {
+        clearTimeout(timeoutId);
+      };
+    }
+  }, [hasControl]);
+
   // 플레이어 생성 (제어권이 있는 곳에서만)
   useEffect(() => {
     if (!apiReady || !music || !music.videoId || !playerRef.current || !hasControl) {
+      // 제어권이 없으면 플레이어 생성하지 않음
       return;
     }
 
@@ -251,15 +277,26 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
     }
 
     return () => {
-      if (youtubePlayerRef.current) {
-        try {
-          youtubePlayerRef.current.destroy();
-        } catch (e) {
-          console.log('플레이어 정리 중 오류:', e);
+      // cleanup 함수: 컴포넌트 언마운트 또는 의존성 변경 시 실행
+      // React의 DOM 조작이 완료된 후 플레이어 제거
+      const timeoutId = setTimeout(() => {
+        if (youtubePlayerRef.current) {
+          try {
+            // 플레이어 제거 (오류 발생 시 무시)
+            youtubePlayerRef.current.destroy();
+          } catch (e) {
+            // 이미 제거되었거나 오류가 발생해도 무시
+            console.log('플레이어 정리 중 오류 (무시):', e);
+          }
+          youtubePlayerRef.current = null;
         }
-        youtubePlayerRef.current = null;
-      }
-      setPlayerReady(false);
+        setPlayerReady(false);
+      }, 0);
+      
+      // cleanup에서 timeout 정리
+      return () => {
+        clearTimeout(timeoutId);
+      };
     };
   }, [apiReady, music?.videoId, hasControl, isPlaying]); // videoId, hasControl, isPlaying 변경 시 업데이트
 
@@ -429,16 +466,16 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
         <div className="music-info">
           <h3>{music.title}</h3>
           <p className="requested-by">요청자: {music.requestedBy}</p>
-          {/* 제어권이 있는 곳에서만 플레이어 표시 */}
-          {hasControl ? (
-            <div className="player-container">
+          {/* 플레이어 컨테이너는 항상 렌더링 (제어권 상실 시 DOM 충돌 방지) */}
+          <div className="player-container">
+            {hasControl ? (
               <div ref={playerRef}></div>
-            </div>
-          ) : (
-            <div className="player-placeholder">
-              <p>제어권이 있는 세션에서만 재생됩니다.</p>
-            </div>
-          )}
+            ) : (
+              <div className="player-placeholder">
+                <p>제어권이 있는 세션에서만 재생됩니다.</p>
+              </div>
+            )}
+          </div>
           
           {/* 제어 버튼들 (제어권 있는 세션에서만) */}
           {hasControl && music && (

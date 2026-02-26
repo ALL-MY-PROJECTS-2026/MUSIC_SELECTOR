@@ -189,3 +189,98 @@
   background: var(--bg-secondary);
 }
 
+/* 태블릿 및 작은 화면 */
+@media (max-width: 768px) {
+  .current-playing {
+    padding: 20px;
+  }
+  
+  .current-playing h2 {
+    font-size: 1.3rem;
+    margin-bottom: 15px;
+  }
+  
+  .music-info h3 {
+    font-size: 1.1rem;
+  }
+  
+  .requested-by {
+    font-size: 0.85rem;
+  }
+  
+  .control-buttons {
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  .control-btn {
+    width: 100%;
+  }
+  
+  .next-btn {
+    padding: 10px;
+    font-size: 0.9rem;
+  }
+}
+
+/* 모바일 화면 */
+@media (max-width: 480px) {
+  .current-playing {
+    padding: 15px;
+  }
+  
+  .current-playing h2 {
+    font-size: 1.1rem;
+    margin-bottom: 12px;
+  }
+  
+  .no-music {
+    padding: 30px 20px;
+    font-size: 0.9rem;
+  }
+  
+  .music-card {
+    gap: 12px;
+  }
+  
+  .playing-indicator {
+    top: 8px;
+    right: 8px;
+    padding: 4px 12px;
+    font-size: 0.75rem;
+  }
+  
+  .music-info h3 {
+    font-size: 1rem;
+    margin-bottom: 6px;
+  }
+  
+  .requested-by {
+    font-size: 0.8rem;
+    margin-bottom: 12px;
+  }
+  
+  .player-placeholder {
+    padding: 30px 15px;
+  }
+  
+  .player-placeholder p {
+    font-size: 0.85rem;
+  }
+  
+  .control-buttons {
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  
+  .control-btn {
+    padding: 10px;
+    font-size: 0.9rem;
+  }
+  
+  .next-btn {
+    padding: 10px;
+    font-size: 0.9rem;
+  }
+}
+
