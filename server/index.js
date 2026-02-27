@@ -170,49 +170,38 @@ io.on('connection', (socket) => {
       // 모든 클라이언트에게 대기열 업데이트 전송
       io.emit('queueUpdated', queueManager.getQueue());
 
-      // 현재 재생 중이 아니면 자동으로 재생 시작
-      // 유휴 상태(재생 중이 아니고 대기열에 곡이 있는 상태)에서 즉시 재생 보장
-      // 제어권이 없으면 관리자에게 자동 부여 시도
-      if (!controlSessionId) {
-        console.log('[requestMusic] 제어권이 없음 - 관리자에게 자동 부여 시도');
-        for (const [socketId, clientInfo] of connectedClients.entries()) {
-          if (clientInfo.isAdmin) {
-            const targetSocket = io.sockets.sockets.get(socketId);
-            if (targetSocket) {
-              controlSessionId = socketId;
-              clientInfo.hasControl = true;
-              console.log(`[requestMusic] 제어권 자동 부여: ${socketId}`);
-              targetSocket.emit('controlStatus', { hasControl: true });
-              broadcastControlStatus();
-              break;
-            }
-          }
-        }
-      }
-      
+      // 제어권이 있을 때만 자동 재생 시도
+      // 제어권이 없어도 음악 신청은 가능 (대기열에만 추가)
       const hasControlForPlay = !!controlSessionId;
       const isIdle = !isPlaying || !currentPlaying; // 유휴 상태 체크
       
+      console.log('[requestMusic] 음악 추가 완료, 재생 조건 확인:', {
+        isPlaying,
+        hasCurrentPlaying: !!currentPlaying,
+        hasControl: hasControlForPlay,
+        controlSessionId: controlSessionId,
+        isIdle,
+        isProcessingNext,
+        queueLength: queueManager.getQueue().length
+      });
+      
+      // 제어권이 있고 유휴 상태일 때만 자동 재생
       if (isIdle && hasControlForPlay) {
-        console.log('유휴 상태에서 음악 신청 - 즉시 재생 시작', {
-          isPlaying,
-          hasCurrentPlaying: !!currentPlaying,
-          hasControl: hasControlForPlay,
-          controlSessionId: controlSessionId,
-          isProcessingNext,
-          queueLength: queueManager.getQueue().length
-        });
+        console.log('[requestMusic] 유휴 상태 + 제어권 있음 - 즉시 재생 시작');
         // isProcessingNext가 true인 경우 리셋 (유휴 상태에서는 false여야 함)
         if (isProcessingNext) {
           console.log('[requestMusic] 유휴 상태인데 isProcessingNext가 true - 리셋');
           isProcessingNext = false;
         }
         // playNextMusic을 호출하여 대기열의 첫 번째 곡 재생
+        // 클라이언트 준비 시간을 확보하기 위해 지연 시간 증가
+        console.log('[requestMusic] playNextMusic 호출 예약 (500ms 지연)');
         setTimeout(() => {
+          console.log('[requestMusic] playNextMusic 호출 실행');
           playNextMusic();
-        }, 100);
+        }, 500);
       } else if (isIdle && !hasControlForPlay) {
-        console.log('자동 재생 조건은 만족하지만 제어권이 없어서 대기 중', {
+        console.log('[requestMusic] 유휴 상태이지만 제어권이 없어서 대기 중 (음악은 대기열에 추가됨)', {
           isPlaying,
           hasCurrentPlaying: !!currentPlaying,
           hasControl: hasControlForPlay,
@@ -221,7 +210,7 @@ io.on('connection', (socket) => {
           adminClients: Array.from(connectedClients.values()).filter(c => c.isAdmin).map(c => ({ socketId: c.socketId, hasControl: c.hasControl }))
         });
       } else {
-        console.log('현재 재생 중이므로 자동 재생하지 않음', {
+        console.log('[requestMusic] 현재 재생 중이므로 대기열에만 추가 (자동 재생하지 않음)', {
           isPlaying,
           hasCurrentPlaying: !!currentPlaying,
           currentPlayingTitle: currentPlaying?.title
@@ -246,14 +235,43 @@ io.on('connection', (socket) => {
   // 재생 종료 알림 (클라이언트에서 감지) - 재생 불가능한 동영상 감지 시 즉시 처리
   // 매우 중요: 어떤 상태든 음악이 끝나면 무조건 다음 곡으로 넘어가야 함
   socket.on('musicEnded', () => {
+    const receiveTime = Date.now();
+    const elapsedSinceStart = playStartTime ? receiveTime - playStartTime : null;
+    
     console.log(`[musicEnded] 음악 재생 종료 알림 수신 (클라이언트: ${socket.id.slice(0, 8)})`, {
       isProcessingNext,
       isPlaying,
       currentPlaying: currentPlaying?.title,
       currentPlayingId: currentPlaying?.id,
       queueLength: queueManager.getQueue().length,
-      hasAutoTimer: !!autoPlayTimer
+      hasAutoTimer: !!autoPlayTimer,
+      playStartTime: playStartTime,
+      receiveTime: receiveTime,
+      elapsedSinceStart: elapsedSinceStart,
+      elapsedSeconds: elapsedSinceStart ? (elapsedSinceStart / 1000).toFixed(2) : null
     });
+    
+    // 재생 시작 직후 5초 이내의 musicEnded는 무시 (플레이어 초기화 중 발생할 수 있는 오탐)
+    // musicPlaying 이벤트 전송 후 클라이언트가 플레이어를 생성하고 비디오를 로드하는데 시간이 필요
+    const IGNORE_DURATION = 5000; // 5초로 증가 (3초 -> 5초)
+    if (elapsedSinceStart !== null && elapsedSinceStart < IGNORE_DURATION) {
+      console.log(`[musicEnded] ⚠️ 초기 musicEnded 무시 (재생 시작 후 ${(elapsedSinceStart / 1000).toFixed(2)}초 경과, ${IGNORE_DURATION / 1000}초 이내)`, {
+        currentPlaying: currentPlaying?.title,
+        currentPlayingId: currentPlaying?.id,
+        elapsedSinceStart,
+        elapsedSeconds: (elapsedSinceStart / 1000).toFixed(2),
+        reason: '플레이어 초기화 중 오탐 가능성 - 클라이언트가 플레이어를 준비하는 시간 필요'
+      });
+      // 클라이언트에 무시됨을 알림
+      socket.emit('musicEndedReceived', { 
+        received: true,
+        ignored: true,
+        reason: `초기 재생 시작 후 ${IGNORE_DURATION / 1000}초 이내 musicEnded는 무시됩니다. (플레이어 초기화 중)`,
+        elapsedSinceStart,
+        elapsedSeconds: (elapsedSinceStart / 1000).toFixed(2)
+      });
+      return; // 무시하고 종료
+    }
     
     // 클라이언트에 이벤트 수신 확인 전송
     socket.emit('musicEndedReceived', { 
@@ -431,23 +449,37 @@ io.on('connection', (socket) => {
       broadcastControlStatus();
       broadcastClientList();
       
-      // 재연결 시 자동 재생 체크 (제어권 부여 후)
+      // 제어권 획득 후 자동 재생 체크
       const queue = queueManager.getQueue();
-      // 대기열에 곡이 있고 재생 중이 아니면 자동 재생
-      if (queue.length > 0 && !isPlaying) {
-        console.log(`[authenticate] 인증 후 자동 재생 체크: 대기열 ${queue.length}개, isPlaying=${isPlaying}`);
-        console.log(`[authenticate] 자동 재생 시작 (인증 후)`);
+      const isIdle = !isPlaying || !currentPlaying;
+      
+      console.log(`[authenticate] 제어권 획득 후 자동 재생 체크:`, {
+        queueLength: queue.length,
+        isPlaying,
+        hasCurrentPlaying: !!currentPlaying,
+        isIdle,
+        isProcessingNext
+      });
+      
+      // 대기열에 곡이 있고 유휴 상태이면 자동 재생
+      if (queue.length > 0 && isIdle) {
+        console.log(`[authenticate] 대기열에 곡이 있고 유휴 상태 - 자동 재생 시작`);
         // 약간의 지연을 두어 클라이언트가 상태를 받은 후 재생
         setTimeout(() => {
           playNextMusic();
         }, 500);
       } else if (queue.length > 0 && isPlaying && !currentPlaying) {
         // 재생 중이라고 표시되어 있지만 실제 재생 중인 곡이 없으면 재생
-        console.log(`[authenticate] 인증 후 상태 불일치 감지: isPlaying=true지만 currentPlaying=null`);
-        console.log(`[authenticate] 자동 재생 시작 (상태 불일치 복구)`);
+        console.log(`[authenticate] 상태 불일치 감지: isPlaying=true지만 currentPlaying=null - 자동 재생 시작`);
         setTimeout(() => {
           playNextMusic();
         }, 500);
+      } else {
+        console.log(`[authenticate] 자동 재생 조건 불만족:`, {
+          queueLength: queue.length,
+          isPlaying,
+          hasCurrentPlaying: !!currentPlaying
+        });
       }
     } else {
       // 인증 실패
@@ -490,10 +522,30 @@ io.on('connection', (socket) => {
     socket.emit('controlStatus', { hasControl: true });
     socket.emit('controlGranted', { message: '제어권을 가져왔습니다.' });
     
-    console.log(`제어권 이전: ${socket.id}`);
+    console.log(`[requestControl] 제어권 이전: ${socket.id}`);
     
     // 모든 관리자에게 제어권 상태 업데이트
     broadcastControlStatus();
+    
+    // 제어권 획득 후 자동 재생 체크
+    const queue = queueManager.getQueue();
+    const isIdle = !isPlaying || !currentPlaying;
+    
+    console.log(`[requestControl] 제어권 획득 후 자동 재생 체크:`, {
+      queueLength: queue.length,
+      isPlaying,
+      hasCurrentPlaying: !!currentPlaying,
+      isIdle,
+      isProcessingNext
+    });
+    
+    // 대기열에 곡이 있고 유휴 상태이면 자동 재생
+    if (queue.length > 0 && isIdle) {
+      console.log(`[requestControl] 대기열에 곡이 있고 유휴 상태 - 자동 재생 시작`);
+      setTimeout(() => {
+        playNextMusic();
+      }, 500);
+    }
   });
 
   // 클라이언트 목록 조회 (관리자만 가능)
@@ -662,9 +714,22 @@ function startPlaying(music) {
   if (music.duration && typeof music.duration === 'string') {
     const parts = music.duration.split(':');
     if (parts.length === 2) {
-      musicDuration = parseInt(parts[0]) * 60 + parseInt(parts[1]);
+      const minutes = parseInt(parts[0], 10);
+      const seconds = parseInt(parts[1], 10);
+      if (!isNaN(minutes) && !isNaN(seconds)) {
+        musicDuration = minutes * 60 + seconds;
+      } else {
+        musicDuration = null;
+      }
     } else if (parts.length === 3) {
-      musicDuration = parseInt(parts[0]) * 3600 + parseInt(parts[1]) * 60 + parseInt(parts[2]);
+      const hours = parseInt(parts[0], 10);
+      const minutes = parseInt(parts[1], 10);
+      const seconds = parseInt(parts[2], 10);
+      if (!isNaN(hours) && !isNaN(minutes) && !isNaN(seconds)) {
+        musicDuration = hours * 3600 + minutes * 60 + seconds;
+      } else {
+        musicDuration = null;
+      }
     } else {
       musicDuration = null;
     }
@@ -672,21 +737,44 @@ function startPlaying(music) {
     musicDuration = null;
   }
   
-  // 모든 클라이언트에 재생 신호 전송
+  // 제어권이 있을 때만 재생 신호 전송 (제어권이 없으면 실제 재생 불가)
+  // 제어권이 있는 클라이언트에게만 musicPlaying 이벤트 전송
+  if (!controlSessionId) {
+    console.error('[startPlaying] ⚠️ 제어권이 없어서 재생 불가 (이 함수는 제어권이 있을 때만 호출되어야 함)', {
+      controlSessionId: controlSessionId,
+      musicTitle: music?.title,
+      connectedClients: Array.from(connectedClients.keys()),
+      adminClients: Array.from(connectedClients.values()).filter(c => c.isAdmin).map(c => ({ socketId: c.socketId, hasControl: c.hasControl }))
+    });
+    // 제어권이 없으면 상태를 설정하지 않고 return
+    // (이미 설정된 상태는 유지 - 제어권 획득 시 재생 가능하도록)
+    isProcessingNext = false;
+    return; // 제어권이 없으면 재생하지 않음
+  }
+  
   const playData = {
     ...currentPlaying,
     playStartTime: playStartTime
   };
-  console.log('musicPlaying 이벤트 전송:', playData);
-  io.emit('musicPlaying', playData);
+  console.log('[startPlaying] musicPlaying 이벤트 전송 예약 (500ms 지연)', {
+    controlSessionId: controlSessionId,
+    musicTitle: currentPlaying.title
+  });
+  setTimeout(() => {
+    console.log('[startPlaying] musicPlaying 이벤트 전송 (모든 클라이언트에게):', playData);
+    // 모든 클라이언트에게 전송 (제어권이 없는 클라이언트도 썸네일 업데이트를 위해)
+    io.emit('musicPlaying', playData);
+    console.log('[startPlaying] musicPlaying 이벤트 전송 완료 (모든 클라이언트)');
+  }, 500);
   
   console.log(`재생 시작: ${currentPlaying.title} (재생 시간: ${musicDuration ? musicDuration + '초' : '알 수 없음'})`);
   
   // 서버에서 자동으로 다음 곡 재생 (제어권 있는 서버에서만 처리)
   // 재생 시간이 있으면 해당 시간 후 자동 재생, 없으면 기본 5분 후 재생
+  // 여유 시간을 더 많이 주어 실제 재생 종료를 기다림 (10초 여유)
   const playDuration = musicDuration && musicDuration > 0 ? musicDuration : 300; // 기본 5분
-  const timerDuration = (playDuration + 2) * 1000; // 재생 시간 + 2초 여유 (밀리초)
-  console.log(`서버 자동 재생 타이머 설정: ${playDuration}초 후 다음 곡 재생 (${timerDuration}ms)`);
+  const timerDuration = (playDuration + 10) * 1000; // 재생 시간 + 10초 여유 (밀리초) - 실제 재생 종료를 기다림
+  console.log(`서버 자동 재생 타이머 설정: ${playDuration}초 후 다음 곡 재생 (${timerDuration}ms, 10초 여유)`);
   
   // 타이머에 저장할 음악 ID (클로저 문제 방지)
   const timerMusicId = music.id;
@@ -843,8 +931,14 @@ function playNextMusic(force = false) {
       queueManager.removeFromQueue(nextMusic.id);
       console.log('[playNextMusic] 대기열에서 제거 후:', queueManager.getQueue().map(m => ({ id: m.id, title: m.title })));
       console.log('[playNextMusic] startPlaying 호출 시작:', nextMusic.title);
-      // startPlaying 내부에서 isProcessingNext = false로 리셋됨
+      // startPlaying 호출 (제어권이 없으면 return하므로 isProcessingNext 리셋 필요)
       startPlaying(nextMusic);
+      // startPlaying에서 제어권이 없어서 return한 경우를 대비해 isProcessingNext 리셋
+      // (제어권이 있으면 startPlaying 내부에서 isProcessingNext = false로 리셋됨)
+      if (!controlSessionId) {
+        console.log('[playNextMusic] startPlaying에서 제어권 없음으로 return됨 - isProcessingNext 리셋');
+        isProcessingNext = false;
+      }
       io.emit('queueUpdated', queueManager.getQueue());
       console.log(`[playNextMusic] 다음 곡으로 전환 완료: ${nextMusic.title}`);
     } else {

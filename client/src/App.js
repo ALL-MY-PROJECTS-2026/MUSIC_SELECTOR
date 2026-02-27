@@ -142,9 +142,41 @@ function App() {
 
     // 음악 재생 중
     socket.on('musicPlaying', (music) => {
-      console.log('musicPlaying 이벤트 수신:', music);
+      const receiveTime = Date.now();
+      console.log('[App] musicPlaying 이벤트 수신:', {
+        id: music?.id,
+        title: music?.title,
+        videoId: music?.videoId,
+        thumbnail: music?.thumbnail,
+        duration: music?.duration,
+        requestedBy: music?.requestedBy,
+        playStartTime: music?.playStartTime,
+        timestamp: receiveTime,
+        isPlaying: true
+      });
+      
+      const beforeState = {
+        currentPlaying: currentPlaying?.id,
+        currentVideoId: currentPlaying?.videoId,
+        isPlaying: isPlaying
+      };
+      
       setCurrentPlaying(music);
       setIsPlaying(true);
+      
+      const afterState = {
+        newCurrentPlaying: music?.id,
+        newVideoId: music?.videoId,
+        newIsPlaying: true
+      };
+      
+      console.log('[App] 상태 업데이트 완료:', {
+        이전상태: beforeState,
+        이후상태: afterState,
+        상태변경: beforeState.currentVideoId !== afterState.newVideoId ? '비디오 변경됨' : '비디오 동일',
+        timestamp: Date.now(),
+        경과시간: Date.now() - receiveTime
+      });
     });
 
     // 음악 중지

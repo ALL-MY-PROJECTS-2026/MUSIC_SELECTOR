@@ -9,16 +9,17 @@ class YoutubeService {
     try {
       console.log(`유튜브 검색 중: ${query} (최대 ${maxResults}개)`);
       
-      // youtube-search-api를 사용하여 검색
-      const results = await YoutubeSearchApi.GetListByKeyword(query, false, maxResults);
+      // 더 많은 결과를 검색하여 재생 불가능한 영상을 필터링한 후에도 충분한 결과 확보
+      const searchMultiplier = 2; // 최대 2배까지 검색
+      const results = await YoutubeSearchApi.GetListByKeyword(query, false, maxResults * searchMultiplier);
       
       if (!results || !results.items || results.items.length === 0) {
         console.log('검색 결과가 없습니다.');
         return [];
       }
 
-      // 검색 결과를 배열로 변환
-      const searchResults = [];
+      // 검색 결과를 배열로 변환 (재생 가능 여부 검증 포함)
+      const rawResults = [];
       
       for (const item of results.items) {
         // 비디오 ID 추출 (여러 형식 지원)
@@ -57,13 +58,47 @@ class YoutubeService {
           thumbnail = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
         }
 
-        searchResults.push({
+        rawResults.push({
           videoId,
           title,
           thumbnail,
           duration: duration
         });
       }
+
+      // 재생 가능 여부 검증 (병렬 처리로 속도 개선)
+      console.log(`검색 결과 ${rawResults.length}개에 대해 재생 가능 여부 검증 시작...`);
+      const validationPromises = rawResults.map(async (item) => {
+        try {
+          // 타임아웃 설정 (5초로 증가 - 네트워크가 느린 경우 대비)
+          const validationPromise = this.validateVideo(item.videoId, item.duration);
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('검증 시간 초과')), 5000)
+          );
+          
+          const validation = await Promise.race([validationPromise, timeoutPromise]);
+          return { item, validation, isValid: validation.valid };
+        } catch (error) {
+          // 타임아웃이나 오류 발생 시 일단 허용 (검증 실패를 막지 않음)
+          // 네트워크 문제로 검증이 실패할 수 있으므로, 일단 허용하고 재생 시도
+          console.log(`영상 검증 타임아웃/오류 (일단 허용): ${item.title} (${item.videoId}) - ${error.message}`);
+          return { item, validation: { valid: true, warning: '검증 시간 초과 - 재생 시도' }, isValid: true };
+        }
+      });
+
+      const validatedResults = await Promise.all(validationPromises);
+      
+      // 재생 가능한 것만 필터링
+      const searchResults = validatedResults
+        .filter(result => result.isValid)
+        .map(result => result.item)
+        .slice(0, maxResults); // 최대 개수만큼만 반환
+
+      const filteredCount = validatedResults.length - searchResults.length;
+      if (filteredCount > 0) {
+        console.log(`재생 불가능한 영상 ${filteredCount}개 필터링됨`);
+      }
+      console.log(`검색 결과 ${searchResults.length}개 반환 (재생 가능한 영상만)`);
 
       return searchResults;
     } catch (error) {
