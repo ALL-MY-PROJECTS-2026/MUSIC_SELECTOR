@@ -118,23 +118,53 @@ function PlaylistModal({ isOpen, onClose, queue, socket, onLoadPlaylist }) {
       return;
     }
 
-    if (window.confirm(`"${playlist.name}" 플레이리스트를 불러오시겠습니까? 현재 대기열이 교체됩니다.`)) {
-      // 플레이리스트의 음악들을 대기열에 추가
-      playlist.musics.forEach((music, index) => {
+    if (window.confirm(`"${playlist.name}" 플레이리스트를 불러오시겠습니까? 가장 높은 하트 노래가 먼저 재생되고 나머지는 대기열에 추가됩니다.`)) {
+      // 하트 개수 순으로 정렬 (내림차순 - 이미 정렬되어 있을 수 있지만 확실히 하기 위해)
+      const sortedMusics = [...playlist.musics].sort((a, b) => (b.count || 0) - (a.count || 0));
+      
+      if (sortedMusics.length === 0) {
+        alert('플레이리스트에 노래가 없습니다.');
+        return;
+      }
+
+      // 첫 번째 노래(가장 높은 하트)를 먼저 대기열에 추가 - 이것이 자동 재생될 것
+      const firstMusic = sortedMusics[0];
+      if (socket) {
+        socket.emit('requestMusic', {
+          musicData: {
+            id: firstMusic.videoId,
+            videoId: firstMusic.videoId,
+            title: firstMusic.title,
+            thumbnail: `https://img.youtube.com/vi/${firstMusic.videoId}/mqdefault.jpg`
+          },
+          requestedBy: `플레이리스트: ${playlist.name} (즉시 재생)`,
+          fromPlaylist: true,
+          isFirstInPlaylist: true
+        });
+      }
+
+      // 나머지 노래들을 대기열에 추가 (첫 번째 노래가 재생 시작되고 상태가 업데이트될 시간을 충분히 주기 위해 2초 지연)
+      if (sortedMusics.length > 1) {
         setTimeout(() => {
-          if (socket) {
-            socket.emit('requestMusic', {
-              musicData: {
-                id: music.videoId,
-                videoId: music.videoId,
-                title: music.title,
-                thumbnail: `https://img.youtube.com/vi/${music.videoId}/mqdefault.jpg`
-              },
-              requestedBy: `플레이리스트: ${playlist.name}`
-            });
-          }
-        }, index * 100); // 순차적으로 추가
-      });
+          sortedMusics.slice(1).forEach((music, index) => {
+            setTimeout(() => {
+              if (socket) {
+                socket.emit('requestMusic', {
+                  musicData: {
+                    id: music.videoId,
+                    videoId: music.videoId,
+                    title: music.title,
+                    thumbnail: `https://img.youtube.com/vi/${music.videoId}/mqdefault.jpg`
+                  },
+                  requestedBy: `플레이리스트: ${playlist.name}`,
+                  fromPlaylist: true,
+                  isFirstInPlaylist: false
+                });
+              }
+            }, index * 150); // 순차적으로 추가 (간격 증가)
+          });
+        }, 2000); // 첫 번째 노래 재생 시작 후 2초 지연 (재생 상태 업데이트 시간 확보)
+      }
       
       if (onLoadPlaylist) {
         onLoadPlaylist(playlist);

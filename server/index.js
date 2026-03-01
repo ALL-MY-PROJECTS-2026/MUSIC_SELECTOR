@@ -135,8 +135,8 @@ io.on('connection', (socket) => {
   // 음악 요청 이벤트 (선택한 음악을 대기열에 추가)
   socket.on('requestMusic', async (data) => {
     try {
-      const { musicData, requestedBy } = data;
-      console.log(`음악 요청: ${musicData.title} (요청자: ${requestedBy || socket.id})`);
+      const { musicData, requestedBy, fromPlaylist, isFirstInPlaylist } = data;
+      console.log(`음악 요청: ${musicData.title} (요청자: ${requestedBy || socket.id}, 플레이리스트: ${fromPlaylist}, 첫번째: ${isFirstInPlaylist})`);
 
       // 영상 재생 가능 여부 검증 (재생 시간도 함께 검증)
       const validation = await youtubeService.validateVideo(musicData.videoId, musicData.duration);
@@ -185,8 +185,17 @@ io.on('connection', (socket) => {
         controlSessionId: controlSessionId,
         isIdle,
         isProcessingNext,
-        queueLength: queueManager.getQueue().length
+        queueLength: queueManager.getQueue().length,
+        fromPlaylist: fromPlaylist,
+        isFirstInPlaylist: isFirstInPlaylist
       });
+      
+      // 플레이리스트에서 온 요청이고 첫 번째 노래가 아니면 무조건 대기열에만 추가
+      if (fromPlaylist && !isFirstInPlaylist) {
+        console.log('[requestMusic] 플레이리스트의 나머지 노래 - 대기열에만 추가 (자동 재생하지 않음)');
+        socket.emit('musicAdded', { message: '음악이 대기열에 추가되었습니다.' });
+        return;
+      }
       
       // 제어권이 있고 유휴 상태일 때만 자동 재생
       if (isIdle && hasControlForPlay) {
