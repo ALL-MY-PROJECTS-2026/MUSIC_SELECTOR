@@ -9,11 +9,15 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
   const [localIsPlaying, setLocalIsPlaying] = useState(false); // 로컬 재생 상태
   const [isLiked, setIsLiked] = useState(false); // 좋아요 상태
   const [likeCount, setLikeCount] = useState(0); // 좋아요 개수
+  const [serverPlaybackPosition, setServerPlaybackPosition] = useState(null); // 서버 재생 위치
   const endedSentRef = useRef(false); // 재생 종료 알림 중복 방지
   const pauseTimeRef = useRef(null); // 일시정지 시점 저장
   const previousHasControlRef = useRef(false); // 이전 제어권 상태 추적 (제어권 획득 시점 감지용)
   const previousVideoIdRef = useRef(null); // 이전 videoId 추적 (새 음악 시작 감지용)
   const previousMusicRef = useRef(null); // 이전 music 추적 (music null에서 새 music으로 변경 감지용)
+  const lastSyncTimeRef = useRef(0); // 마지막 동기화 시간 (5초에 1회 제한)
+  const playbackPositionIntervalRef = useRef(null); // 재생 위치 전송 인터벌
+  const cleanupTimeoutRef = useRef(null); // cleanup timeout 추적
 
   // YouTube IFrame API 로드
   useEffect(() => {
@@ -171,8 +175,14 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
         // 기존 플레이어 제거
         if (youtubePlayerRef.current) {
           try {
-            youtubePlayerRef.current.destroy();
-            console.log('[플레이어 생성 useEffect] 기존 플레이어 제거 완료');
+            // 플레이어가 실제로 DOM에 존재하는지 확인
+            const playerElement = playerRef.current;
+            if (playerElement && playerElement.parentNode) {
+              youtubePlayerRef.current.destroy();
+              console.log('[플레이어 생성 useEffect] 기존 플레이어 제거 완료');
+            } else {
+              console.log('[플레이어 생성 useEffect] 플레이어가 이미 DOM에서 제거됨');
+            }
           } catch (e) {
             console.log('[플레이어 생성 useEffect] 플레이어 제거 오류 (무시):', e);
           }
@@ -213,9 +223,25 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
             playerReady,
             videoId: music.videoId,
             isPlaying,
-            hasControl
+            hasControl,
+            playStartTime: music.playStartTime
           });
-          youtubePlayerRef.current.loadVideoById(music.videoId, true); // true = 즉시 재생 시작
+          
+          // playStartTime이 있고 제어권이 없거나 로컬 재생 모드이면 현재 재생 위치부터 로드
+          let startSeconds = 0;
+          if (music.playStartTime && (!hasControl || localPlayMode)) {
+            const playStartTime = new Date(music.playStartTime).getTime();
+            const currentTime = Date.now();
+            const elapsedSeconds = Math.floor((currentTime - playStartTime) / 1000);
+            startSeconds = Math.max(0, elapsedSeconds);
+            console.log('[loadVideoById] 현재 재생 위치 계산:', {
+              playStartTime: music.playStartTime,
+              currentTime: currentTime,
+              elapsedSeconds: startSeconds
+            });
+          }
+          
+          youtubePlayerRef.current.loadVideoById(music.videoId, startSeconds); // startSeconds = 시작 위치
           const loadCallTime = Date.now();
           console.log('[loadVideoById] 비디오 로드 호출 완료:', {
             videoId: music.videoId,
@@ -402,9 +428,15 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
       // 기존 플레이어가 있으면 제거
       if (youtubePlayerRef.current) {
         try {
-          youtubePlayerRef.current.destroy();
+          // 플레이어가 실제로 DOM에 존재하는지 확인
+          const playerElement = playerRef.current;
+          if (playerElement && playerElement.parentNode) {
+            youtubePlayerRef.current.destroy();
+          } else {
+            console.log('[플레이어 생성] 플레이어가 이미 DOM에서 제거됨');
+          }
         } catch (e) {
-          console.log('플레이어 제거 중 오류:', e);
+          console.log('[플레이어 생성] 플레이어 제거 중 오류:', e);
         }
         youtubePlayerRef.current = null;
       }
@@ -420,12 +452,29 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
       // 제어권이 없고 로컬 재생 모드일 때는 오디오만 재생 (영상 숨김)
       const isAudioOnly = !hasControl && localPlayMode;
       
+      // playStartTime이 있으면 현재 재생 위치 계산 (제어권이 없거나 로컬 재생 모드일 때)
+      let initialStartSeconds = 0;
+      if (music.playStartTime && (!hasControl || localPlayMode)) {
+        const playStartTime = new Date(music.playStartTime).getTime();
+        const currentTime = Date.now();
+        const elapsedSeconds = Math.floor((currentTime - playStartTime) / 1000);
+        initialStartSeconds = Math.max(0, elapsedSeconds);
+        console.log('[플레이어 생성] 현재 재생 위치 계산:', {
+          playStartTime: music.playStartTime,
+          currentTime: currentTime,
+          elapsedSeconds: initialStartSeconds,
+          hasControl,
+          localPlayMode
+        });
+      }
+      
       youtubePlayerRef.current = new window.YT.Player(playerRef.current, {
         height: isAudioOnly ? '1' : '200', // 오디오만 재생할 때는 높이를 1px로 설정
         width: '100%',
         videoId: music.videoId,
         playerVars: {
-          autoplay: (isPlaying && hasControl) || (localPlayMode && localIsPlaying) ? 1 : 0, // 제어권이 있거나 로컬 재생 모드일 때 자동 재생
+          autoplay: 0, // 항상 0으로 설정하고 onReady에서 위치 확인 후 재생
+          start: initialStartSeconds, // 시작 위치 지정 (제어권이 없거나 로컬 재생 모드일 때)
           controls: hasControl ? 1 : 0, // 제어권이 있을 때만 YouTube 컨트롤 표시 (로컬 재생 모드에서는 오디오만이므로 컨트롤 숨김)
           modestbranding: 1,
           rel: 0,
@@ -477,41 +526,54 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                   timestamp: playCallTime
                 });
                 
-                // 로컬 재생 모드이고 제어권이 없으면 현재 재생 위치부터 재생
-                if (localPlayMode && !hasControl && music.playStartTime) {
+                // playStartTime이 있으면 현재 재생 위치부터 재생 (제어권이 없는 클라이언트 또는 로컬 재생 모드)
+                // 제어권이 있는 클라이언트는 처음부터 재생 (서버 제어)
+                // 항상 playStartTime을 확인하여 현재 위치 계산 (내 장치로 듣기 모드 포함)
+                let seekPosition = 0;
+                if (music.playStartTime) {
                   const playStartTime = new Date(music.playStartTime).getTime();
                   const currentTime = Date.now();
                   const elapsedSeconds = Math.floor((currentTime - playStartTime) / 1000);
-                  const seekPosition = Math.max(0, elapsedSeconds);
+                  seekPosition = Math.max(0, elapsedSeconds);
                   
-                  console.log('[onReady] 로컬 재생 모드 - 현재 위치로 이동:', {
+                  console.log('[onReady] 현재 재생 위치 계산:', {
                     playStartTime: music.playStartTime,
                     currentTime: currentTime,
-                    elapsedSeconds: seekPosition
+                    elapsedSeconds: seekPosition,
+                    hasControl,
+                    localPlayMode
                   });
-                  
+                }
+                
+                // 제어권이 없거나 로컬 재생 모드이면 현재 위치부터 재생
+                if ((!hasControl || localPlayMode) && seekPosition > 0) {
                   // 현재 위치로 이동 후 재생
-                  if (seekPosition > 0 && typeof event.target.seekTo === 'function') {
+                  if (typeof event.target.seekTo === 'function') {
                     event.target.seekTo(seekPosition, true);
                     console.log('[onReady] seekTo 호출:', seekPosition, '초');
                     // seekTo 후 약간의 지연 후 재생
                     setTimeout(() => {
-                      if (youtubePlayerRef.current && localPlayMode && typeof youtubePlayerRef.current.playVideo === 'function') {
+                      if (youtubePlayerRef.current && typeof youtubePlayerRef.current.playVideo === 'function') {
                         youtubePlayerRef.current.playVideo();
-                        console.log('[onReady] 로컬 재생 시작 (현재 위치부터)');
+                        console.log('[onReady] 재생 시작 (현재 위치부터):', seekPosition, '초');
                       }
-                    }, 300);
+                    }, 500); // 충분한 지연
                   } else {
-                    // 위치가 0이면 바로 재생
+                    // seekTo가 없으면 바로 재생
                     event.target.playVideo();
-                    console.log('[onReady] playVideo() 호출 완료 (위치 0부터)');
+                    console.log('[onReady] playVideo() 호출 완료 (seekTo 없음)');
                   }
                 } else {
-                  // 제어권이 있으면 처음부터 재생
+                  // 제어권이 있고 로컬 재생 모드가 아니면 처음부터 재생 (서버 제어)
+                  // 또는 위치가 0이면 처음부터 재생
                   event.target.playVideo();
                   console.log('[onReady] playVideo() 호출 완료', {
                     videoId: music.videoId,
-                    호출시간: playCallTime
+                    호출시간: playCallTime,
+                    hasControl,
+                    localPlayMode,
+                    seekPosition,
+                    playStartTime: music.playStartTime
                   });
                 }
                 // 재생 가능 여부 확인 (약간의 지연 후)
@@ -836,27 +898,22 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
 
     return () => {
       // cleanup 함수: 컴포넌트 언마운트 또는 의존성 변경 시 실행
-      // React의 DOM 조작이 완료된 후 플레이어 제거
-      let timeoutId = null;
+      // 제어권 변경만으로는 플레이어를 제거하지 않음 (플레이어 컨테이너는 항상 렌더링됨)
+      // music이 변경되거나 컴포넌트가 언마운트될 때만 플레이어 제거
       
-      timeoutId = setTimeout(() => {
-        if (youtubePlayerRef.current) {
-          try {
-            // 플레이어 제거 (오류 발생 시 무시)
-            youtubePlayerRef.current.destroy();
-          } catch (e) {
-            // 이미 제거되었거나 오류가 발생해도 무시
-            console.log('플레이어 정리 중 오류 (무시):', e);
-          }
-          youtubePlayerRef.current = null;
-        }
-        setPlayerReady(false);
-      }, 0);
-      
-      // cleanup에서 timeout 정리
-      if (timeoutId) {
-        clearTimeout(timeoutId);
+      // 이전 cleanup timeout이 있으면 정리
+      if (cleanupTimeoutRef.current) {
+        clearTimeout(cleanupTimeoutRef.current);
+        cleanupTimeoutRef.current = null;
       }
+      
+      // 제어권 변경만으로는 플레이어를 제거하지 않음
+      // music이 null이 되거나 videoId가 변경될 때만 플레이어 제거
+      // 이는 별도의 useEffect에서 처리되므로 여기서는 제거하지 않음
+      // 단, 컴포넌트가 언마운트될 때는 플레이어를 제거해야 함
+      // 하지만 현재 의존성 배열에 hasControl이 포함되어 있어서 제어권 변경 시에도 실행됨
+      // 따라서 제어권 변경 시에는 플레이어를 제거하지 않도록 함
+      console.log('[cleanup] useEffect cleanup 실행 (제어권 변경 시 플레이어 유지)');
     };
   }, [apiReady, music, hasControl, isPlaying, localPlayMode, localIsPlaying]); // music 객체 전체를 의존성에 추가하여 music 변경 시 플레이어 재생성
 
@@ -871,8 +928,15 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
       console.log('[music null 감지] 플레이어 정리 시작');
       if (youtubePlayerRef.current) {
         try {
-          youtubePlayerRef.current.destroy();
-          console.log('[music null 감지] 플레이어 제거 완료');
+          // 플레이어가 실제로 DOM에 존재하는지 확인
+          const playerElement = playerRef.current;
+          if (playerElement && playerElement.parentNode) {
+            youtubePlayerRef.current.destroy();
+            console.log('[music null 감지] 플레이어 제거 완료');
+          } else {
+            // 이미 DOM에서 제거된 경우 ref만 정리
+            console.log('[music null 감지] 플레이어가 이미 DOM에서 제거됨');
+          }
         } catch (e) {
           console.log('[music null 감지] 플레이어 제거 오류 (무시):', e);
         }
@@ -1387,6 +1451,112 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
     };
   }, [isPlaying, playerReady, music, hasControl, localPlayMode, localIsPlaying]);
 
+  // 제어권 있는 클라이언트: 재생 위치를 서버에 주기적으로 전송
+  useEffect(() => {
+    if (hasControl && playerReady && youtubePlayerRef.current && isPlaying) {
+      // 기존 인터벌 정리
+      if (playbackPositionIntervalRef.current) {
+        clearInterval(playbackPositionIntervalRef.current);
+        playbackPositionIntervalRef.current = null;
+      }
+      
+      // 3초마다 재생 위치 전송
+      playbackPositionIntervalRef.current = setInterval(() => {
+        if (youtubePlayerRef.current && window.socket && hasControl && isPlaying) {
+          try {
+            const currentTime = youtubePlayerRef.current.getCurrentTime();
+            if (typeof currentTime === 'number' && currentTime >= 0) {
+              window.socket.emit('updatePlaybackPosition', {
+                position: currentTime,
+                videoId: music?.videoId
+              });
+            }
+          } catch (e) {
+            console.log('[재생 위치 전송] 오류:', e);
+          }
+        }
+      }, 3000); // 3초마다 전송
+      
+      return () => {
+        if (playbackPositionIntervalRef.current) {
+          clearInterval(playbackPositionIntervalRef.current);
+          playbackPositionIntervalRef.current = null;
+        }
+      };
+    } else {
+      // 재생 중이 아니거나 제어권이 없으면 인터벌 정리
+      if (playbackPositionIntervalRef.current) {
+        clearInterval(playbackPositionIntervalRef.current);
+        playbackPositionIntervalRef.current = null;
+      }
+    }
+  }, [hasControl, playerReady, isPlaying, music?.videoId]);
+
+  // 서버 재생 위치 업데이트 이벤트 수신
+  useEffect(() => {
+    if (!window.socket) return;
+    
+    const handlePlaybackPositionUpdate = (data) => {
+      if (data && data.videoId && typeof data.position === 'number') {
+        setServerPlaybackPosition({
+          videoId: data.videoId,
+          position: data.position,
+          timestamp: data.timestamp || Date.now()
+        });
+      }
+    };
+    
+    window.socket.on('playbackPositionUpdate', handlePlaybackPositionUpdate);
+    
+    return () => {
+      window.socket.off('playbackPositionUpdate', handlePlaybackPositionUpdate);
+    };
+  }, []);
+
+  // 로컬 재생 모드: 서버 재생 위치와 동기화 (제어권 없는 클라이언트)
+  useEffect(() => {
+    if (!localPlayMode || hasControl || !playerReady || !youtubePlayerRef.current || !localIsPlaying) {
+      return;
+    }
+    
+    if (!serverPlaybackPosition || !music || serverPlaybackPosition.videoId !== music.videoId) {
+      return;
+    }
+    
+    // 5초에 1회만 동기화 (너무 자주 호출 방지)
+    const now = Date.now();
+    if (now - lastSyncTimeRef.current < 5000) {
+      return;
+    }
+    
+    try {
+      const myPosition = youtubePlayerRef.current.getCurrentTime();
+      const serverPosition = serverPlaybackPosition.position;
+      
+      // 네트워크 지연 보정
+      const delay = (Date.now() - serverPlaybackPosition.timestamp) / 1000;
+      const adjustedServerPosition = serverPosition + delay;
+      
+      const difference = Math.abs(myPosition - adjustedServerPosition);
+      
+      // 차이가 3초 이상이면 동기화
+      if (difference >= 3) {
+        console.log('[재생 위치 동기화] 동기화 실행:', {
+          내위치: myPosition,
+          서버위치: adjustedServerPosition,
+          차이: difference
+        });
+        
+        if (typeof youtubePlayerRef.current.seekTo === 'function') {
+          youtubePlayerRef.current.seekTo(adjustedServerPosition, true);
+          lastSyncTimeRef.current = now;
+        }
+      }
+    } catch (e) {
+      console.log('[재생 위치 동기화] 오류:', e);
+    }
+  }, [serverPlaybackPosition, localPlayMode, hasControl, playerReady, localIsPlaying, music?.videoId]);
+
   // localPlayMode가 false로 변경될 때 로컬 재생 완전히 중지
   useEffect(() => {
     if (!localPlayMode && youtubePlayerRef.current && playerReady) {
@@ -1417,9 +1587,6 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
         // 현재 재생 중인 곡이 다르면 새 곡으로 전환
         const currentVideoId = youtubePlayerRef.current.getVideoData()?.video_id;
         if (currentVideoId !== music.videoId) {
-          // 새 곡 로드
-          youtubePlayerRef.current.loadVideoById(music.videoId, true);
-          
           // 현재 재생 위치 계산 (playStartTime 기준)
           const calculateCurrentPosition = () => {
             if (music.playStartTime) {
@@ -1438,11 +1605,14 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
             elapsedSeconds: seekPosition
           });
           
+          // 새 곡 로드 (자동 재생 방지: false)
+          youtubePlayerRef.current.loadVideoById(music.videoId, seekPosition);
+          
           // 비디오 로드 후 해당 위치로 이동하여 재생
           setTimeout(() => {
             if (youtubePlayerRef.current && localPlayMode) {
               try {
-                // 먼저 해당 위치로 이동
+                // 먼저 해당 위치로 이동 (이미 loadVideoById에서 위치 지정했지만 확실히 하기 위해)
                 if (seekPosition > 0 && typeof youtubePlayerRef.current.seekTo === 'function') {
                   youtubePlayerRef.current.seekTo(seekPosition, true); // true = 정확한 위치로 이동
                   console.log('[로컬 재생] seekTo 호출:', seekPosition, '초');
@@ -1454,13 +1624,13 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                       youtubePlayerRef.current.playVideo();
                       console.log('[로컬 재생] 재생 시작 (현재 위치부터)');
                     }
-                  }, 300); // seekTo 후 약간의 지연
+                  }, 500); // seekTo 후 충분한 지연
                 }
               } catch (e) {
                 console.log('[로컬 재생] 위치 이동 및 재생 오류:', e);
               }
             }
-          }, 500);
+          }, 800);
         } else {
           // 같은 곡이면 현재 위치에서 재생 (현재 재생 위치 계산)
           const calculateCurrentPosition = () => {
@@ -1504,6 +1674,35 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
     }
   }, [music?.videoId, music?.playStartTime, localPlayMode, playerReady]);
 
+  // 컴포넌트 언마운트 시 플레이어 정리
+  useEffect(() => {
+    return () => {
+      // 컴포넌트가 언마운트될 때만 플레이어 제거
+      console.log('[언마운트 cleanup] 플레이어 정리 시작');
+      if (cleanupTimeoutRef.current) {
+        clearTimeout(cleanupTimeoutRef.current);
+        cleanupTimeoutRef.current = null;
+      }
+      
+      if (youtubePlayerRef.current) {
+        try {
+          // 플레이어가 실제로 DOM에 존재하는지 확인
+          const playerElement = playerRef.current;
+          if (playerElement && playerElement.parentNode) {
+            youtubePlayerRef.current.destroy();
+            console.log('[언마운트 cleanup] 플레이어 제거 완료');
+          } else {
+            console.log('[언마운트 cleanup] 플레이어가 이미 DOM에서 제거됨');
+          }
+        } catch (e) {
+          console.log('[언마운트 cleanup] 플레이어 제거 오류 (무시):', e);
+        }
+        youtubePlayerRef.current = null;
+      }
+      setPlayerReady(false);
+    };
+  }, []); // 빈 의존성 배열: 컴포넌트 언마운트 시에만 실행
+
   // 토글 버튼 핸들러
   const handleTogglePlayMode = () => {
     if (!setLocalPlayMode) return;
@@ -1539,10 +1738,12 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
             // 현재 재생 중인 곡이 다르면 새 곡으로 전환
             const currentVideoId = youtubePlayerRef.current.getVideoData()?.video_id;
             if (currentVideoId !== music.videoId) {
-              youtubePlayerRef.current.loadVideoById(music.videoId, true);
+              // 새 곡 로드 (자동 재생 방지: seekPosition을 두 번째 파라미터로 전달)
+              youtubePlayerRef.current.loadVideoById(music.videoId, seekPosition);
               // 비디오 로드 후 해당 위치로 이동하여 재생
               setTimeout(() => {
                 if (youtubePlayerRef.current && typeof youtubePlayerRef.current.seekTo === 'function' && typeof youtubePlayerRef.current.playVideo === 'function') {
+                  // 이미 loadVideoById에서 위치 지정했지만 확실히 하기 위해 seekTo 호출
                   if (seekPosition > 0) {
                     youtubePlayerRef.current.seekTo(seekPosition, true);
                     console.log('[토글] seekTo 호출:', seekPosition, '초');
@@ -1552,9 +1753,9 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                       youtubePlayerRef.current.playVideo();
                       console.log('[토글] 재생 시작 (현재 위치부터)');
                     }
-                  }, 300);
+                  }, 500); // 충분한 지연
                 }
-              }, 500);
+              }, 800);
             } else {
               // 같은 곡이면 현재 위치로 이동하여 재생
               if (typeof youtubePlayerRef.current.seekTo === 'function' && typeof youtubePlayerRef.current.playVideo === 'function') {
@@ -1590,7 +1791,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
     }
   };
 
-  // 제어권이 없고 음악이 없으면 "재생 중인 음악이 없습니다" 표시
+  // 음악이 없으면 "재생 중인 음악이 없습니다" 표시
   if (!music) {
     return (
       <div className="current-playing">
@@ -1602,49 +1803,8 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
     );
   }
 
-  // 제어권이 없으면 썸네일과 토글 버튼 표시
-  if (!hasControl) {
-    return (
-      <div className="current-playing">
-        <h2>현재 재생 중</h2>
-        <div className="music-card">
-          <div className="thumbnail-container">
-            <img src={music.thumbnail} alt={music.title} />
-            <span 
-              className="like-icon" 
-              onClick={handleLikeClick}
-            >
-              <span className="material-icons">{isLiked ? 'favorite' : 'favorite_border'}</span>
-              {likeCount > 0 && (
-                <span className="like-count-badge">{likeCount}</span>
-              )}
-            </span>
-            {(isPlaying || (localPlayMode && localIsPlaying)) && (
-              <div className="playing-indicator">재생 중</div>
-            )}
-          </div>
-          <div className="music-info">
-            <h3>{music.title}</h3>
-            <p className="requested-by">요청자: {music.requestedBy}</p>
-            {/* 토글 버튼 - 숨김 처리 */}
-            <div className="play-mode-toggle" style={{ display: 'none' }}>
-              <button 
-                onClick={handleTogglePlayMode}
-                className={`toggle-btn ${localPlayMode ? 'local-mode' : 'server-mode'}`}
-              >
-                {localPlayMode ? '내 장치로 듣기' : '서버 장치로 듣기'}
-              </button>
-            </div>
-          </div>
-          {/* 플레이어 컨테이너는 항상 렌더링 (로컬 재생 모드일 때만 오디오만 재생, 영상은 숨김) */}
-          <div className={`player-container ${localPlayMode ? 'audio-only' : 'hidden'}`} style={{ display: localPlayMode ? 'block' : 'none' }}>
-            <div ref={playerRef}></div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
+  // 단일 JSX 구조로 통합하여 제어권 이동 시 DOM 충돌 방지
+  // 플레이어 컨테이너는 항상 렌더링하되, 조건부로 표시/숨김 처리
   return (
     <div className="current-playing">
       <h2>현재 재생 중</h2>
@@ -1660,15 +1820,22 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
               <span className="like-count-badge">{likeCount}</span>
             )}
           </span>
-          {isPlaying && (
+          {(isPlaying || (localPlayMode && localIsPlaying)) && (
             <div className="playing-indicator">재생 중</div>
           )}
         </div>
         <div className="music-info">
           <h3>{music.title}</h3>
           <p className="requested-by">요청자: {music.requestedBy}</p>
-          {/* 플레이어 컨테이너는 항상 렌더링 (제어권 상실 시 DOM 충돌 방지) */}
-          <div className="player-container">
+          
+          {/* 플레이어 컨테이너는 항상 렌더링 (제어권 이동 시 DOM 충돌 방지) */}
+          {/* 제어권이 없고 로컬 재생 모드가 아니면 숨김, 제어권이 있거나 로컬 재생 모드면 표시 */}
+          <div 
+            className={`player-container ${localPlayMode ? 'audio-only' : ''}`} 
+            style={{ 
+              display: (hasControl || localPlayMode) ? 'block' : 'none' 
+            }}
+          >
             <div ref={playerRef}></div>
           </div>
           
@@ -1693,6 +1860,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
             </div>
           )}
           
+          {/* 다음 음악 재생 버튼 */}
           {isAdmin ? (
             hasControl ? (
               <button onClick={onPlayNext} className="next-btn">

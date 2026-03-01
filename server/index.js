@@ -30,6 +30,8 @@ let playStartTime = null; // 재생 시작 시간
 let musicDuration = null; // 음악 재생 시간 (초)
 let autoPlayTimer = null; // 자동 재생 타이머
 let isProcessingNext = false; // 다음 곡 처리 중 플래그 (중복 방지)
+let currentPlaybackPosition = null; // 현재 재생 위치 (초 단위)
+let playbackPositionTimer = null; // 재생 위치 브로드캐스트 타이머
 
 // 연결된 클라이언트 관리
 const connectedClients = new Map(); // socketId -> clientInfo
@@ -365,6 +367,21 @@ io.on('connection', (socket) => {
     }
   });
 
+  // 재생 위치 업데이트 (제어권 있는 클라이언트에서만 수신)
+  socket.on('updatePlaybackPosition', (data) => {
+    const clientInfo = connectedClients.get(socket.id);
+    // 제어권이 있는 클라이언트만 수신
+    if (clientInfo && controlSessionId === socket.id && data && typeof data.position === 'number') {
+      currentPlaybackPosition = {
+        videoId: currentPlaying?.videoId,
+        position: data.position,
+        timestamp: Date.now()
+      };
+      // 로그는 너무 자주 출력되므로 주석 처리
+      // console.log('[updatePlaybackPosition] 재생 위치 업데이트:', currentPlaybackPosition);
+    }
+  });
+
   // 다음 음악 재생 요청 (제어권 있는 관리자만 가능)
   socket.on('playNext', () => {
     const clientInfo = connectedClients.get(socket.id);
@@ -558,6 +575,75 @@ io.on('connection', (socket) => {
         playNextMusic();
       }, 500);
     }
+  });
+
+  // 플레이리스트 전송 요청 (제어권 보유 클라이언트로)
+  socket.on('sendPlaylistToController', (data) => {
+    try {
+      const { playlists, fromSocketId } = data;
+      
+      console.log(`[sendPlaylistToController] 플레이리스트 전송 요청 수신:`, {
+        fromSocketId: fromSocketId?.slice(0, 8),
+        playlistCount: playlists?.length || 0,
+        hasControlSession: !!controlSessionId
+      });
+
+      // 검증: 플레이리스트 데이터 유효성 확인
+      if (!playlists || !Array.isArray(playlists) || playlists.length === 0) {
+        socket.emit('playlistReceivedByServer', {
+          success: false,
+          message: '유효하지 않은 플레이리스트 데이터입니다.'
+        });
+        return;
+      }
+
+      // 제어권 보유 세션이 있는지 확인
+      if (!controlSessionId) {
+        socket.emit('playlistReceivedByServer', {
+          success: false,
+          message: '제어권을 가진 세션이 없습니다.'
+        });
+        return;
+      }
+
+      // 제어권 보유 클라이언트로 플레이리스트 전달
+      const controllerSocket = io.sockets.sockets.get(controlSessionId);
+      if (controllerSocket) {
+        controllerSocket.emit('receivePlaylistFromClient', {
+          playlists: playlists,
+          fromSocketId: fromSocketId
+        });
+        
+        // 전송 클라이언트에 성공 알림
+        socket.emit('playlistReceivedByServer', {
+          success: true,
+          message: '플레이리스트가 제어권 보유자에게 전달되었습니다.'
+        });
+        
+        console.log(`[sendPlaylistToController] 플레이리스트 전달 완료: ${controlSessionId.slice(0, 8)}`);
+      } else {
+        socket.emit('playlistReceivedByServer', {
+          success: false,
+          message: '제어권 보유 세션을 찾을 수 없습니다.'
+        });
+      }
+    } catch (error) {
+      console.error('[sendPlaylistToController] 오류:', error);
+      socket.emit('playlistReceivedByServer', {
+        success: false,
+        message: '플레이리스트 전송 중 오류가 발생했습니다.'
+      });
+    }
+  });
+
+  // 플레이리스트 저장 완료 알림 (제어권 보유 클라이언트에서)
+  socket.on('playlistSavedByController', (data) => {
+    console.log('[playlistSavedByController] 플레이리스트 저장 완료:', data);
+  });
+
+  // 플레이리스트 거부 알림 (제어권 보유 클라이언트에서)
+  socket.on('playlistRejectedByController', (data) => {
+    console.log('[playlistRejectedByController] 플레이리스트 거부:', data);
   });
 
   // 클라이언트 목록 조회 (관리자만 가능)
@@ -881,6 +967,9 @@ function startPlaying(music) {
     // 모든 클라이언트에게 전송 (제어권이 없는 클라이언트도 썸네일 업데이트를 위해)
     io.emit('musicPlaying', playData);
     console.log('[startPlaying] musicPlaying 이벤트 전송 완료 (모든 클라이언트)');
+    
+    // 재생 위치 브로드캐스트 시작
+    startPlaybackPositionBroadcast();
   }, 800);
   
   console.log(`재생 시작: ${currentPlaying.title} (재생 시간: ${musicDuration ? musicDuration + '초' : '알 수 없음'})`);
@@ -1065,6 +1154,7 @@ function playNextMusic(force = false) {
       playStartTime = null;
       musicDuration = null;
       isProcessingNext = false; // 플래그 리셋 (중요: 대기열에 곡이 추가되면 재생 가능하도록)
+      stopPlaybackPositionBroadcast(); // 재생 위치 브로드캐스트 중지
       io.emit('musicStopped');
       io.emit('queueUpdated', queueManager.getQueue());
       console.log('[playNextMusic] 재생할 음악이 없습니다. 대기열에 곡이 추가되면 자동 재생됩니다.');
@@ -1110,6 +1200,39 @@ function broadcastControlStatus() {
   });
 }
 
+// 재생 위치 브로드캐스트 시작
+function startPlaybackPositionBroadcast() {
+  // 기존 타이머 정리
+  if (playbackPositionTimer) {
+    clearInterval(playbackPositionTimer);
+    playbackPositionTimer = null;
+  }
+  
+  // 5초마다 재생 위치 브로드캐스트
+  playbackPositionTimer = setInterval(() => {
+    if (currentPlaybackPosition && currentPlaying && isPlaying) {
+      // 네트워크 지연 보정: timestamp와 현재 시간의 차이를 더함
+      const delay = Date.now() - currentPlaybackPosition.timestamp;
+      const adjustedPosition = currentPlaybackPosition.position + (delay / 1000);
+      
+      io.emit('playbackPositionUpdate', {
+        videoId: currentPlaybackPosition.videoId,
+        position: adjustedPosition,
+        timestamp: Date.now()
+      });
+    }
+  }, 5000); // 5초마다 브로드캐스트
+}
+
+// 재생 위치 브로드캐스트 중지
+function stopPlaybackPositionBroadcast() {
+  if (playbackPositionTimer) {
+    clearInterval(playbackPositionTimer);
+    playbackPositionTimer = null;
+  }
+  currentPlaybackPosition = null;
+}
+
 // 서버 상태 초기화 함수
 function initializeServer() {
   // 모든 연결된 클라이언트 초기화
@@ -1130,6 +1253,9 @@ function initializeServer() {
     clearTimeout(autoPlayTimer);
     autoPlayTimer = null;
   }
+  
+  // 재생 위치 브로드캐스트 타이머 정리
+  stopPlaybackPositionBroadcast();
   
   // 대기열 초기화
   queueManager.clearQueue();

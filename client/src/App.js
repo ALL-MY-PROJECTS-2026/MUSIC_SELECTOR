@@ -48,6 +48,11 @@ function App() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authPassword, setAuthPassword] = useState('');
   const [showPlaylistModal, setShowPlaylistModal] = useState(false);
+  const [showSendPlaylistBtn, setShowSendPlaylistBtn] = useState(false);
+  const [showReceivePlaylistModal, setShowReceivePlaylistModal] = useState(false);
+  const [receivedPlaylistData, setReceivedPlaylistData] = useState(null);
+  const [showSendPlaylistConfirmModal, setShowSendPlaylistConfirmModal] = useState(false);
+  const [playlistsToSend, setPlaylistsToSend] = useState([]);
   const authSuccessRef = useRef(false); // 인증 성공 중복 알림 방지
   const [isDarkMode, setIsDarkMode] = useState(() => {
     // localStorage에서 테마 설정 불러오기 (기본값: 다크모드)
@@ -74,6 +79,23 @@ function App() {
   const toggleLocalPlayMode = () => {
     setLocalPlayMode(prev => !prev);
   };
+
+  // 초기 마운트 시 플레이리스트 확인 (제어권이 없을 때)
+  useEffect(() => {
+    if (!hasControl && isAdmin) {
+      try {
+        const stored = localStorage.getItem('savedPlaylists');
+        if (stored) {
+          const playlists = JSON.parse(stored);
+          if (playlists && playlists.length > 0) {
+            setShowSendPlaylistBtn(true);
+          }
+        }
+      } catch (e) {
+        console.error('플레이리스트 확인 오류:', e);
+      }
+    }
+  }, [hasControl, isAdmin]);
 
   useEffect(() => {
     // 연결 상태
@@ -104,16 +126,51 @@ function App() {
     // 제어권 가져오기 성공 (인증과 별도로 제어권만 가져올 때)
     socket.on('controlGranted', (data) => {
       setHasControl(true);
+      setShowSendPlaylistBtn(false); // 제어권 획득 시 전송 버튼 숨김
       // 인증 성공이 아닌 경우에만 알림 (인증 성공 시에는 중복 알림 방지)
       if (data.message && !authSuccessRef.current) {
         alert(data.message);
       }
       authSuccessRef.current = false; // 플래그 리셋
     });
+    
+    // 플레이리스트 수신 (제어권 보유 클라이언트)
+    socket.on('receivePlaylistFromClient', (data) => {
+      setReceivedPlaylistData(data);
+      setShowReceivePlaylistModal(true);
+    });
+    
+    // 플레이리스트 전송 결과
+    socket.on('playlistReceivedByServer', (data) => {
+      if (data.success) {
+        alert('플레이리스트가 서버에 전달되었습니다.');
+        setShowSendPlaylistBtn(false);
+      } else {
+        alert(`플레이리스트 전송 실패: ${data.message || '알 수 없는 오류'}`);
+      }
+    });
 
     // 제어권 빼앗김
     socket.on('controlTaken', (data) => {
       setHasControl(false);
+      // 플레이리스트 전송 버튼 표시 여부 확인
+      try {
+        const stored = localStorage.getItem('savedPlaylists');
+        if (stored) {
+          const playlists = JSON.parse(stored);
+          if (playlists && playlists.length > 0) {
+            console.log('[controlTaken] 플레이리스트 발견, 전송 버튼 표시:', playlists.length);
+            setShowSendPlaylistBtn(true);
+          } else {
+            setShowSendPlaylistBtn(false);
+          }
+        } else {
+          setShowSendPlaylistBtn(false);
+        }
+      } catch (e) {
+        console.error('플레이리스트 확인 오류:', e);
+        setShowSendPlaylistBtn(false);
+      }
       if (data.message) {
         alert(data.message);
       }
@@ -288,6 +345,8 @@ function App() {
       socket.off('likeUpdated');
       socket.off('likeCount');
       socket.off('likedStatus');
+      socket.off('receivePlaylistFromClient');
+      socket.off('playlistReceivedByServer');
       socket.off('error');
     };
   }, []);
@@ -355,6 +414,95 @@ function App() {
     }
   };
 
+  const handleClosePlaylistModal = () => {
+    setShowPlaylistModal(false);
+  };
+
+  const handleSendPlaylistToController = () => {
+    try {
+      const stored = localStorage.getItem('savedPlaylists');
+      if (!stored) {
+        alert('전송할 플레이리스트가 없습니다.');
+        return;
+      }
+
+      const playlists = JSON.parse(stored);
+      if (!playlists || playlists.length === 0) {
+        alert('전송할 플레이리스트가 없습니다.');
+        return;
+      }
+
+      // 확인 모달 표시
+      setPlaylistsToSend(playlists);
+      setShowSendPlaylistConfirmModal(true);
+    } catch (e) {
+      console.error('플레이리스트 전송 오류:', e);
+      alert('플레이리스트 전송 중 오류가 발생했습니다.');
+    }
+  };
+
+  const handleConfirmSendPlaylist = () => {
+    try {
+      socket.emit('sendPlaylistToController', {
+        playlists: playlistsToSend,
+        fromSocketId: socket.id
+      });
+      setShowSendPlaylistConfirmModal(false);
+      setPlaylistsToSend([]);
+    } catch (e) {
+      console.error('플레이리스트 전송 오류:', e);
+      alert('플레이리스트 전송 중 오류가 발생했습니다.');
+    }
+  };
+
+  const handleCancelSendPlaylist = () => {
+    setShowSendPlaylistConfirmModal(false);
+    setPlaylistsToSend([]);
+  };
+
+  const handleSaveReceivedPlaylist = () => {
+    if (!receivedPlaylistData || !receivedPlaylistData.playlists) {
+      return;
+    }
+
+    try {
+      const stored = localStorage.getItem('savedPlaylists');
+      const existingPlaylists = stored ? JSON.parse(stored) : [];
+      
+      // 기존 플레이리스트와 병합 (중복 제거)
+      const existingIds = new Set(existingPlaylists.map(p => p.id));
+      const newPlaylists = receivedPlaylistData.playlists.filter(p => !existingIds.has(p.id));
+      const mergedPlaylists = [...existingPlaylists, ...newPlaylists];
+      
+      localStorage.setItem('savedPlaylists', JSON.stringify(mergedPlaylists));
+      alert(`플레이리스트 ${newPlaylists.length}개가 저장되었습니다.`);
+      
+      setShowReceivePlaylistModal(false);
+      setReceivedPlaylistData(null);
+      
+      // 서버에 저장 완료 알림 (선택)
+      socket.emit('playlistSavedByController', {
+        success: true,
+        savedCount: newPlaylists.length
+      });
+    } catch (e) {
+      console.error('플레이리스트 저장 오류:', e);
+      alert('플레이리스트 저장 중 오류가 발생했습니다.');
+    }
+  };
+
+  const handleRejectReceivedPlaylist = () => {
+    if (window.confirm('수신한 플레이리스트를 거부하시겠습니까?')) {
+      setShowReceivePlaylistModal(false);
+      setReceivedPlaylistData(null);
+      
+      // 서버에 거부 알림 (선택)
+      socket.emit('playlistRejectedByController', {
+        success: false
+      });
+    }
+  };
+
   return (
     <div className="App">
       <div className="container">
@@ -374,6 +522,15 @@ function App() {
                 {!hasControl && (
                   <button onClick={handleRequestControl} className="request-control-btn">
                     제어권 가져오기
+                  </button>
+                )}
+                {!hasControl && showSendPlaylistBtn && (
+                  <button 
+                    onClick={handleSendPlaylistToController} 
+                    className="send-playlist-btn"
+                    title="플레이리스트 전송"
+                  >
+                    <span className="material-icons">send</span>
                   </button>
                 )}
               </>
@@ -451,6 +608,76 @@ function App() {
           queue={queue}
           socket={socket}
         />
+
+        {/* 플레이리스트 전송 확인 모달 */}
+        {showSendPlaylistConfirmModal && playlistsToSend.length > 0 && (
+          <div className="modal-overlay" onClick={handleCancelSendPlaylist}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <h2>플레이리스트 전송 확인</h2>
+                <button className="modal-close-btn" onClick={handleCancelSendPlaylist}>
+                  <span className="material-icons">close</span>
+                </button>
+              </div>
+              <div className="modal-body">
+                <p>다음 플레이리스트 {playlistsToSend.length}개를 제어권 보유자에게 전송하시겠습니까?</p>
+                <div className="received-playlist-list">
+                  {playlistsToSend.map((playlist, index) => (
+                    <div key={playlist.id || index} className="received-playlist-item">
+                      <div className="playlist-item-name">{playlist.name}</div>
+                      <div className="playlist-item-meta">
+                        <span>{playlist.musics?.length || 0}개 곡</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="modal-actions">
+                  <button onClick={handleCancelSendPlaylist} className="reject-btn">
+                    취소
+                  </button>
+                  <button onClick={handleConfirmSendPlaylist} className="save-btn">
+                    전송하기
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 플레이리스트 수신 모달 */}
+        {showReceivePlaylistModal && receivedPlaylistData && (
+          <div className="modal-overlay" onClick={handleRejectReceivedPlaylist}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <h2>플레이리스트 수신</h2>
+                <button className="modal-close-btn" onClick={handleRejectReceivedPlaylist}>
+                  <span className="material-icons">close</span>
+                </button>
+              </div>
+              <div className="modal-body">
+                <p>다른 클라이언트에서 플레이리스트 {receivedPlaylistData.playlists?.length || 0}개를 전송했습니다.</p>
+                <div className="received-playlist-list">
+                  {receivedPlaylistData.playlists?.map((playlist, index) => (
+                    <div key={playlist.id || index} className="received-playlist-item">
+                      <div className="playlist-item-name">{playlist.name}</div>
+                      <div className="playlist-item-meta">
+                        <span>{playlist.musics?.length || 0}개 곡</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="modal-actions">
+                  <button onClick={handleSaveReceivedPlaylist} className="save-btn">
+                    저장하기
+                  </button>
+                  <button onClick={handleRejectReceivedPlaylist} className="reject-btn">
+                    거부하기
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="main-content">
           <div className="left-panel">
