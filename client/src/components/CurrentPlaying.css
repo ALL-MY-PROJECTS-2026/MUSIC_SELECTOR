@@ -5,10 +5,26 @@
   transition: background-color 0.3s, border-color 0.3s;
 }
 
+.current-playing-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  gap: 15px;
+}
+
 .current-playing h2 {
   color: var(--text-primary);
-  margin-bottom: 20px;
+  margin: 0;
   font-size: 1.5rem;
+  flex: 1;
+}
+
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .no-music {
@@ -27,6 +43,145 @@
   position: relative;
   width: 100%;
   overflow: hidden;
+}
+
+
+/* 볼륨 조절 컴팩트 버전 */
+.volume-control-compact {
+  position: relative;
+}
+
+.volume-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.volume-icon-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-hover);
+  transform: scale(1.1);
+}
+
+.volume-icon-btn .material-icons {
+  font-size: 1.2rem;
+}
+
+.volume-slider-popup {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  min-width: 50px;
+  z-index: 10;
+}
+
+.volume-slider-vertical {
+  -webkit-appearance: slider-vertical;
+  writing-mode: bt-lr;
+  width: 6px;
+  height: 120px;
+  padding: 0 5px;
+  background: var(--bg-secondary);
+  outline: none;
+  cursor: pointer;
+  appearance: slider-vertical;
+}
+
+.volume-slider-vertical::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #4a9eff;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.volume-slider-vertical::-webkit-slider-thumb:hover {
+  background: #3a8eef;
+}
+
+.volume-slider-vertical::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #4a9eff;
+  cursor: pointer;
+  border: none;
+  transition: background 0.2s;
+}
+
+.volume-slider-vertical::-moz-range-thumb:hover {
+  background: #3a8eef;
+}
+
+.volume-value-compact {
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-align: center;
+  min-width: 30px;
+}
+
+/* 다음 음악 재생 버튼 컴팩트 버전 */
+.next-btn-compact {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: #4a9eff;
+  border: 1px solid #4a9eff;
+  border-radius: 50%;
+  color: white;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.next-btn-compact:hover:not(:disabled) {
+  background: #3a8eef;
+  border-color: #3a8eef;
+  transform: scale(1.1);
+}
+
+.next-btn-compact:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.next-btn-compact.disabled {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: not-allowed;
+  border-color: var(--border-color);
+  opacity: 0.6;
+}
+
+.next-btn-compact.disabled:hover {
+  transform: none;
+}
+
+.next-btn-compact .material-icons {
+  font-size: 1.3rem;
 }
 
 .thumbnail-container img {
@@ -240,6 +395,70 @@
   background: #ff6b6b;
   color: #ffffff;
   border-color: #ff6b6b;
+}
+
+.volume-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 15px;
+  padding: 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+.volume-icon {
+  color: var(--text-primary);
+  font-size: 1.2rem;
+  flex-shrink: 0;
+}
+
+.volume-slider {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-secondary);
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #4a9eff;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.volume-slider::-webkit-slider-thumb:hover {
+  background: #3a8eef;
+}
+
+.volume-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #4a9eff;
+  cursor: pointer;
+  border: none;
+  transition: background 0.2s;
+}
+
+.volume-slider::-moz-range-thumb:hover {
+  background: #3a8eef;
+}
+
+.volume-value {
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  min-width: 40px;
+  text-align: right;
+  flex-shrink: 0;
 }
 
 .pause-btn:hover {

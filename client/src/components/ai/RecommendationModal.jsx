@@ -46,24 +46,20 @@ const RecommendationModal = ({
               <h3>📊 추천 기준</h3>
               <div className="recommendation-info-content">
                 <div className="recommendation-info-item">
-                  <strong>아티스트 일치 (40%) - 1순위</strong>
-                  <p>대기열의 인기 음악과 같은 아티스트의 다른 노래를 최우선으로 추천합니다.</p>
+                  <strong>아티스트 일치 (45%) - 1순위</strong>
+                  <p>대기열에 있는 가수들의 다른 노래를 최우선으로 추천합니다. 대기열에 없는 노래만 추천됩니다.</p>
                 </div>
                 <div className="recommendation-info-item">
-                  <strong>인기도 (30%) - 2순위</strong>
-                  <p>YouTube 조회수와 최신도를 기반으로 인기도를 계산합니다. 인기 있는 노래를 우선 추천합니다.</p>
-                </div>
-                <div className="recommendation-info-item">
-                  <strong>텍스트 유사도 (15%) - 3순위</strong>
+                  <strong>텍스트 유사도 (35%) - 2순위</strong>
                   <p>대기열의 인기 음악 제목을 분석하여 유사한 스타일의 음악을 추천합니다.</p>
                 </div>
                 <div className="recommendation-info-item">
-                  <strong>아티스트 다양성 (10%) - 4순위</strong>
-                  <p>다양한 아티스트의 유사한 노래도 추천하여 반복을 방지하고 새로운 발견을 돕습니다.</p>
+                  <strong>인기도 (15%) - 3순위</strong>
+                  <p>YouTube 조회수와 최신도를 기반으로 인기도를 계산합니다. 인기 있는 노래를 우선 추천합니다.</p>
                 </div>
                 <div className="recommendation-info-item">
-                  <strong>장르 일치 (5%) - 5순위</strong>
-                  <p>대기열의 인기 음악과 같은 장르의 음악에 보너스를 부여합니다. (K-pop, Pop, Rock, Hip-hop 등)</p>
+                  <strong>아티스트 다양성 (5%) - 4순위</strong>
+                  <p>다양한 아티스트의 유사한 노래도 추천하여 반복을 방지하고 새로운 발견을 돕습니다.</p>
                 </div>
                 <div className="recommendation-info-item">
                   <strong>모음집 필터링</strong>

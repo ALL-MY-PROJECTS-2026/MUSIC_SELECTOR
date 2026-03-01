@@ -37,7 +37,18 @@ let playbackPositionTimer = null; // 재생 위치 브로드캐스트 타이머
 const connectedClients = new Map(); // socketId -> clientInfo
 
 // 제어권 관리 (하나의 세션만 제어권 보유)
-let controlSessionId = null; // 제어권을 가진 세션 ID
+let controlSessionId = null; // 제어권을 가진 세션 ID (브라우저 세션 ID)
+let controlSocketId = null; // 제어권을 가진 socket.id (현재 연결된 소켓)
+
+// 세션 ID와 socket.id 매핑 관리
+const sessionToSocketMap = new Map(); // sessionId -> socketId
+const socketToSessionMap = new Map(); // socketId -> sessionId
+
+// 제어권 확인 헬퍼 함수 (socket.id로 제어권 확인)
+const hasControlBySocketId = (socketId) => {
+  const sessionId = socketToSessionMap.get(socketId);
+  return sessionId && controlSessionId === sessionId && controlSocketId === socketId;
+};
 
 // 좋아요 데이터 저장소
 const musicLikes = new Map(); // videoId -> { title, count, likedSessions: Set }
@@ -122,6 +133,58 @@ io.on('connection', (socket) => {
   // 재연결 시 자동 재생 체크 (제어권 부여 후)
   // 인증 후에만 자동 재생 체크 (현재는 제어권이 없으므로 스킵)
   // 인증 성공 후 재연결 시 자동 재생은 authenticate 이벤트에서 처리
+
+  // 세션 ID 등록 (새로고침 후 제어권 복원을 위해)
+  socket.on('registerSession', (data) => {
+    const { sessionId } = data;
+    if (!sessionId) {
+      console.log('세션 ID가 제공되지 않음:', socket.id);
+      return;
+    }
+    
+    console.log(`세션 ID 등록: ${sessionId} -> ${socket.id}`);
+    
+    // 이전 socket.id 매핑 제거 (같은 세션이 재연결된 경우)
+    const oldSocketId = sessionToSocketMap.get(sessionId);
+    if (oldSocketId && oldSocketId !== socket.id) {
+      socketToSessionMap.delete(oldSocketId);
+      const oldClientInfo = connectedClients.get(oldSocketId);
+      if (oldClientInfo) {
+        oldClientInfo.hasControl = false;
+      }
+    }
+    
+    // 새 매핑 저장
+    sessionToSocketMap.set(sessionId, socket.id);
+    socketToSessionMap.set(socket.id, sessionId);
+    clientInfo.sessionId = sessionId;
+    
+    // 이전에 제어권을 가진 세션이면 제어권 복원
+    if (controlSessionId === sessionId) {
+      console.log(`제어권 복원: ${sessionId} (socket.id: ${socket.id})`);
+      controlSocketId = socket.id;
+      clientInfo.hasControl = true;
+      clientInfo.isAdmin = true; // 제어권이 있으면 관리자 권한도 복원
+      
+      socket.emit('currentState', {
+        currentPlaying,
+        queue: queueManager.getQueue(),
+        isPlaying,
+        isAdmin: true,
+        hasControl: true
+      });
+      socket.emit('controlStatus', { hasControl: true });
+      socket.emit('authenticationSuccess', {
+        message: '제어권이 복원되었습니다.',
+        hasControl: true,
+        isAdmin: true
+      });
+      
+      // 모든 관리자에게 제어권 상태 업데이트
+      broadcastControlStatus();
+      broadcastClientList();
+    }
+  });
 
   // 음악 검색 이벤트 (검색 결과만 반환)
   socket.on('searchMusic', async (data) => {
@@ -359,7 +422,7 @@ io.on('connection', (socket) => {
   // 재생 중지 요청 (제어권 있는 관리자만 가능)
   socket.on('pauseMusic', () => {
     const clientInfo = connectedClients.get(socket.id);
-    if (clientInfo && clientInfo.isAdmin && controlSessionId === socket.id) {
+    if (clientInfo && clientInfo.isAdmin && hasControlBySocketId(socket.id)) {
       isPlaying = false;
       io.emit('musicPaused');
       console.log('음악 일시정지 (제어권 보유자)');
@@ -371,7 +434,7 @@ io.on('connection', (socket) => {
   // 재생 시작 요청 (제어권 있는 관리자만 가능)
   socket.on('resumeMusic', () => {
     const clientInfo = connectedClients.get(socket.id);
-    if (clientInfo && clientInfo.isAdmin && controlSessionId === socket.id) {
+    if (clientInfo && clientInfo.isAdmin && hasControlBySocketId(socket.id)) {
       if (currentPlaying) {
         isPlaying = true;
         io.emit('musicResumed', currentPlaying);
@@ -386,7 +449,7 @@ io.on('connection', (socket) => {
   socket.on('updatePlaybackPosition', (data) => {
     const clientInfo = connectedClients.get(socket.id);
     // 제어권이 있는 클라이언트만 수신
-    if (clientInfo && controlSessionId === socket.id && data && typeof data.position === 'number') {
+    if (clientInfo && hasControlBySocketId(socket.id) && data && typeof data.position === 'number') {
       currentPlaybackPosition = {
         videoId: currentPlaying?.videoId,
         position: data.position,
@@ -401,7 +464,7 @@ io.on('connection', (socket) => {
   socket.on('seekPlaybackPosition', (data) => {
     const clientInfo = connectedClients.get(socket.id);
     // 제어권이 있는 클라이언트만 수신
-    if (clientInfo && controlSessionId === socket.id && data && typeof data.position === 'number') {
+    if (clientInfo && hasControlBySocketId(socket.id) && data && typeof data.position === 'number') {
       currentPlaybackPosition = {
         videoId: currentPlaying?.videoId,
         position: data.position,
@@ -429,15 +492,15 @@ io.on('connection', (socket) => {
     console.log(`다음 음악 재생 요청 받음`, { 
       socketId: socket.id.slice(0, 8), 
       isAdmin: isAdminUser, 
-      hasControl: controlSessionId === socket.id,
+      hasControl: hasControlBySocketId(socket.id),
       controlSessionId: controlSessionId?.slice(0, 8)
     });
     
-    if (isAdminUser && controlSessionId === socket.id) {
+    if (isAdminUser && hasControlBySocketId(socket.id)) {
       console.log(`다음 음악 재생 요청 승인 (제어권 보유자: ${socket.id.slice(0, 8)})`);
       playNextMusic();
     } else {
-      console.log(`다음 음악 재생 요청 거부 (관리자: ${isAdminUser}, 제어권: ${controlSessionId === socket.id})`);
+      console.log(`다음 음악 재생 요청 거부 (관리자: ${isAdminUser}, 제어권: ${hasControlBySocketId(socket.id)})`);
       socket.emit('error', { message: '제어권이 없습니다. 제어권을 가진 세션에서만 다음 음악 재생이 가능합니다.' });
     }
   });
@@ -445,7 +508,7 @@ io.on('connection', (socket) => {
   // 대기열에서 삭제 (제어권 있는 관리자만 가능)
   socket.on('removeFromQueue', (musicId) => {
     const clientInfo = connectedClients.get(socket.id);
-    if (clientInfo && clientInfo.isAdmin && controlSessionId === socket.id) {
+    if (clientInfo && clientInfo.isAdmin && hasControlBySocketId(socket.id)) {
       queueManager.removeFromQueue(musicId);
       io.emit('queueUpdated', queueManager.getQueue());
       console.log(`대기열에서 제거됨 (제어권 보유자): ${musicId}`);
@@ -457,7 +520,7 @@ io.on('connection', (socket) => {
   // 대기열 순서 변경 (제어권 있는 관리자만 가능)
   socket.on('reorderQueue', (data) => {
     const clientInfo = connectedClients.get(socket.id);
-    if (clientInfo && clientInfo.isAdmin && controlSessionId === socket.id) {
+    if (clientInfo && clientInfo.isAdmin && hasControlBySocketId(socket.id)) {
       const { fromIndex, toIndex } = data;
       const success = queueManager.reorderQueue(fromIndex, toIndex);
       if (success) {
@@ -485,24 +548,38 @@ io.on('connection', (socket) => {
       // 인증 성공
       clientInfo.isAdmin = true;
       
+      // 세션 ID 확인
+      const sessionId = clientInfo.sessionId || socketToSessionMap.get(socket.id);
+      
       // 제어권 이전 (다른 세션에서 제어권을 가지고 있으면 이전)
-      if (controlSessionId && controlSessionId !== socket.id) {
-        const previousController = connectedClients.get(controlSessionId);
-        if (previousController) {
-          previousController.hasControl = false;
-          const prevSocket = io.sockets.sockets.get(controlSessionId);
-          if (prevSocket) {
-            prevSocket.emit('controlStatus', { hasControl: false });
-            prevSocket.emit('controlTaken', { 
-              message: '다른 위치에서 인증이 완료되어 제어권이 이동되었습니다.' 
-            });
+      if (controlSessionId && controlSessionId !== sessionId) {
+        const prevSocketId = sessionToSocketMap.get(controlSessionId);
+        if (prevSocketId) {
+          const previousController = connectedClients.get(prevSocketId);
+          if (previousController) {
+            previousController.hasControl = false;
+            const prevSocket = io.sockets.sockets.get(prevSocketId);
+            if (prevSocket) {
+              prevSocket.emit('controlStatus', { hasControl: false });
+              prevSocket.emit('controlTaken', { 
+                message: '다른 위치에서 인증이 완료되어 제어권이 이동되었습니다.' 
+              });
+            }
           }
         }
       }
       
-      // 새 제어권 부여
-      controlSessionId = socket.id;
-      clientInfo.hasControl = true;
+      // 새 제어권 부여 (세션 ID로 관리)
+      if (sessionId) {
+        controlSessionId = sessionId;
+        controlSocketId = socket.id;
+        clientInfo.hasControl = true;
+      } else {
+        // 세션 ID가 없으면 socket.id를 세션 ID로 사용 (하위 호환성)
+        controlSessionId = socket.id;
+        controlSocketId = socket.id;
+        clientInfo.hasControl = true;
+      }
       
       socket.emit('authenticationSuccess', { 
         message: '인증이 완료되었습니다. 제어권을 획득했습니다.',
@@ -567,27 +644,41 @@ io.on('connection', (socket) => {
       return;
     }
 
-    if (controlSessionId === socket.id) {
+    // 세션 ID 확인
+    const sessionId = clientInfo.sessionId || socketToSessionMap.get(socket.id);
+    
+    if (controlSessionId === sessionId && hasControlBySocketId(socket.id)) {
       socket.emit('error', { message: '이미 제어권을 가지고 있습니다.' });
       return;
     }
 
     // 제어권 이전
     if (controlSessionId) {
-      const previousController = connectedClients.get(controlSessionId);
-      if (previousController) {
-        previousController.hasControl = false;
-        const prevSocket = io.sockets.sockets.get(controlSessionId);
-        if (prevSocket) {
-          prevSocket.emit('controlStatus', { hasControl: false });
-          prevSocket.emit('controlTaken', { message: '제어권이 다른 세션으로 이전되었습니다.' });
+      const prevSocketId = sessionToSocketMap.get(controlSessionId);
+      if (prevSocketId) {
+        const previousController = connectedClients.get(prevSocketId);
+        if (previousController) {
+          previousController.hasControl = false;
+          const prevSocket = io.sockets.sockets.get(prevSocketId);
+          if (prevSocket) {
+            prevSocket.emit('controlStatus', { hasControl: false });
+            prevSocket.emit('controlTaken', { message: '제어권이 다른 세션으로 이전되었습니다.' });
+          }
         }
       }
     }
 
-    // 새 제어권 부여
-    controlSessionId = socket.id;
-    clientInfo.hasControl = true;
+    // 새 제어권 부여 (세션 ID로 관리)
+    if (sessionId) {
+      controlSessionId = sessionId;
+      controlSocketId = socket.id;
+      clientInfo.hasControl = true;
+    } else {
+      // 세션 ID가 없으면 socket.id를 세션 ID로 사용 (하위 호환성)
+      controlSessionId = socket.id;
+      controlSocketId = socket.id;
+      clientInfo.hasControl = true;
+    }
     socket.emit('controlStatus', { hasControl: true });
     socket.emit('controlGranted', { message: '제어권을 가져왔습니다.' });
     
@@ -647,7 +738,8 @@ io.on('connection', (socket) => {
       }
 
       // 제어권 보유 클라이언트로 플레이리스트 전달
-      const controllerSocket = io.sockets.sockets.get(controlSessionId);
+      const controllerSocketId = controlSocketId || sessionToSocketMap.get(controlSessionId);
+      const controllerSocket = controllerSocketId ? io.sockets.sockets.get(controllerSocketId) : null;
       if (controllerSocket) {
         controllerSocket.emit('receivePlaylistFromClient', {
           playlists: playlists,
@@ -693,7 +785,7 @@ io.on('connection', (socket) => {
       // 각 클라이언트에 hasControl 정보 추가
       const clientList = Array.from(connectedClients.values()).map(clientInfo => ({
         ...clientInfo,
-        hasControl: controlSessionId === clientInfo.socketId
+        hasControl: hasControlBySocketId(clientInfo.socketId)
       }));
       socket.emit('clientList', clientList);
     } else {
@@ -724,9 +816,9 @@ io.on('connection', (socket) => {
   socket.on('disconnectAllExceptController', () => {
     const clientInfo = connectedClients.get(socket.id);
     const isAdminUser = clientInfo && clientInfo.isAdmin;
-    console.log(`일괄 해제 요청 (요청자: ${socket.id.slice(0, 8)}, 관리자: ${isAdminUser}, 제어권: ${controlSessionId === socket.id})`);
+    console.log(`일괄 해제 요청 (요청자: ${socket.id.slice(0, 8)}, 관리자: ${isAdminUser}, 제어권: ${hasControlBySocketId(socket.id)})`);
     
-    if (isAdminUser && controlSessionId === socket.id) {
+    if (isAdminUser && hasControlBySocketId(socket.id)) {
       let disconnectedCount = 0;
       let adminDisconnectedCount = 0;
       let userDisconnectedCount = 0;
@@ -735,7 +827,7 @@ io.on('connection', (socket) => {
       // 제어권 있는 세션을 제외한 모든 클라이언트 수집 (관리자 포함)
       connectedClients.forEach((clientInfo, socketId) => {
         // 제어권 있는 세션만 제외하고 나머지는 모두 해제 (관리자든 일반 사용자든)
-        if (socketId !== controlSessionId) {
+        if (!hasControlBySocketId(socketId)) {
           clientsToDisconnect.push({ socketId, clientInfo });
         }
       });
@@ -884,14 +976,34 @@ io.on('connection', (socket) => {
       const queueData = queueManager.getQueue();
       const likesData = {};
       
-      // 각 음악의 좋아요 개수 조회
-      queueData.forEach(music => {
+      // 현재 재생 중인 음악도 항상 포함 (대기열에 없으면 추가, 있으면 맨 앞으로 이동)
+      let extendedQueue = [...queueData];
+      if (currentPlaying) {
+        // 현재 재생 중인 음악이 대기열에 있는지 확인
+        const currentPlayingIndex = extendedQueue.findIndex(music => music.videoId === currentPlaying.videoId);
+        
+        if (currentPlayingIndex !== -1) {
+          // 대기열에 있으면 맨 앞으로 이동
+          extendedQueue.splice(currentPlayingIndex, 1);
+          extendedQueue = [currentPlaying, ...extendedQueue];
+          console.log('[getQueueAndLikes] 현재 재생 중인 음악을 맨 앞으로 이동:', currentPlaying.title);
+        } else {
+          // 대기열에 없으면 맨 앞에 추가
+          extendedQueue = [currentPlaying, ...extendedQueue];
+          console.log('[getQueueAndLikes] 현재 재생 중인 음악 포함 (대기열에 없음):', currentPlaying.title);
+        }
+      }
+      
+      // 각 음악의 좋아요 개수 조회 (대기열 + 현재 재생 중인 음악 모두 포함)
+      extendedQueue.forEach(music => {
         const likeData = musicLikes.get(music.videoId);
         likesData[music.videoId] = likeData ? likeData.count : 0;
       });
       
+      console.log(`[getQueueAndLikes] 확장된 대기열 반환: ${extendedQueue.length}개 (대기열: ${queueData.length}개, 현재 재생: ${currentPlaying ? 1 : 0}개)`);
+      
       socket.emit('queueAndLikes', {
-        queue: queueData,
+        queue: extendedQueue,
         musicLikes: likesData
       });
     } catch (error) {
@@ -929,14 +1041,18 @@ io.on('connection', (socket) => {
       
       const response = await youtube.videos.list({
         key: process.env.YOUTUBE_API_KEY,
-        part: 'statistics,snippet',
+        part: 'statistics,snippet,status',
         id: videoIdsBatch.join(',')
       });
       
       const details = response.data.items.map(item => ({
         videoId: item.id,
         viewCount: parseInt(item.statistics.viewCount || 0),
-        publishedAt: item.snippet.publishedAt
+        publishedAt: item.snippet.publishedAt,
+        // 재생 가능 여부 확인
+        isPlayable: item.status && item.status.embeddable !== false && 
+                   item.status.privacyStatus === 'public' &&
+                   item.status.uploadStatus === 'processed'
       }));
       
       socket.emit('videoDetails', details);
@@ -949,6 +1065,207 @@ io.on('connection', (socket) => {
     }
   });
 
+  // 재생 가능 여부 확인 (배치 처리)
+  socket.on('checkVideoPlayability', async (videoIds) => {
+    try {
+      if (!process.env.YOUTUBE_API_KEY) {
+        socket.emit('playabilityCheckError', { 
+          message: 'YouTube Data API 키가 설정되지 않았습니다.' 
+        });
+        return;
+      }
+
+      let google;
+      try {
+        google = require('googleapis');
+      } catch (err) {
+        socket.emit('playabilityCheckError', { 
+          message: 'googleapis 패키지가 설치되지 않았습니다.' 
+        });
+        return;
+      }
+
+      const youtube = google.youtube('v3');
+      
+      // 배치 처리 (최대 50개)
+      const videoIdsBatch = Array.isArray(videoIds) ? videoIds.slice(0, 50) : [videoIds];
+      
+      const response = await youtube.videos.list({
+        key: process.env.YOUTUBE_API_KEY,
+        part: 'status',
+        id: videoIdsBatch.join(',')
+      });
+      
+      // 재생 가능 여부 확인 결과
+      const playabilityResults = {};
+      
+      if (response.data.items) {
+        response.data.items.forEach(item => {
+          // 재생 가능 조건:
+          // 1. embeddable이 true (또는 undefined - 기본값 true)
+          // 2. privacyStatus가 'public'
+          // 3. uploadStatus가 'processed'
+          const isPlayable = item.status && 
+                           item.status.embeddable !== false && 
+                           item.status.privacyStatus === 'public' &&
+                           item.status.uploadStatus === 'processed';
+          
+          playabilityResults[item.id] = {
+            videoId: item.id,
+            isPlayable: isPlayable,
+            reason: isPlayable ? '재생 가능' : 
+                   (item.status.privacyStatus !== 'public' ? '비공개 영상' :
+                   (item.status.uploadStatus !== 'processed' ? '처리 중인 영상' :
+                   (item.status.embeddable === false ? '임베드 불가능' : '알 수 없는 이유')))
+          };
+        });
+      }
+      
+      // API에서 반환되지 않은 videoId는 재생 불가능으로 간주
+      videoIdsBatch.forEach(videoId => {
+        if (!playabilityResults[videoId]) {
+          playabilityResults[videoId] = {
+            videoId: videoId,
+            isPlayable: false,
+            reason: '영상을 찾을 수 없음 (삭제되었거나 존재하지 않음)'
+          };
+        }
+      });
+      
+      socket.emit('playabilityCheckResults', playabilityResults);
+    } catch (error) {
+      console.error('[checkVideoPlayability] 오류:', error);
+      socket.emit('playabilityCheckError', { 
+        message: '재생 가능 여부 확인 실패: ' + error.message 
+      });
+    }
+  });
+
+  // 채널 정보 확인 (공식 채널 우선순위 확인용)
+  socket.on('getChannelInfo', async (videoIds) => {
+    try {
+      if (!process.env.YOUTUBE_API_KEY) {
+        socket.emit('channelInfoError', { 
+          message: 'YouTube Data API 키가 설정되지 않았습니다.' 
+        });
+        return;
+      }
+
+      let google;
+      try {
+        google = require('googleapis');
+      } catch (err) {
+        socket.emit('channelInfoError', { 
+          message: 'googleapis 패키지가 설치되지 않았습니다.' 
+        });
+        return;
+      }
+
+      const youtube = google.youtube('v3');
+      
+      // 배치 처리 (최대 50개)
+      const videoIdsBatch = Array.isArray(videoIds) ? videoIds.slice(0, 50) : [videoIds];
+      
+      // 먼저 비디오 정보로 채널 ID 가져오기
+      const videoResponse = await youtube.videos.list({
+        key: process.env.YOUTUBE_API_KEY,
+        part: 'snippet',
+        id: videoIdsBatch.join(',')
+      });
+      
+      const channelIds = [];
+      const videoIdToChannelId = {};
+      
+      if (videoResponse.data.items) {
+        videoResponse.data.items.forEach(item => {
+          const channelId = item.snippet.channelId;
+          if (channelId && !channelIds.includes(channelId)) {
+            channelIds.push(channelId);
+          }
+          videoIdToChannelId[item.id] = channelId;
+        });
+      }
+      
+      if (channelIds.length === 0) {
+        socket.emit('channelInfoResults', {});
+        return;
+      }
+      
+      // 채널 정보 가져오기
+      const channelResponse = await youtube.channels.list({
+        key: process.env.YOUTUBE_API_KEY,
+        part: 'snippet,brandingSettings',
+        id: channelIds.join(',')
+      });
+      
+      const channelInfoMap = {};
+      
+      if (channelResponse.data.items) {
+        channelResponse.data.items.forEach(channel => {
+          const channelId = channel.id;
+          const channelTitle = channel.snippet.title || '';
+          const channelDescription = channel.snippet.description || '';
+          
+          // 공식 채널 판단 기준
+          const isOfficial = 
+            channel.brandingSettings?.channel?.keywords?.toLowerCase().includes('official') ||
+            channelTitle.toLowerCase().includes('official') ||
+            channelTitle.toLowerCase().includes('공식') ||
+            channelDescription.toLowerCase().includes('official channel') ||
+            channelDescription.toLowerCase().includes('공식 채널');
+          
+          // 음악 레이블 채널 판단
+          const isMusicLabel = 
+            channelTitle.toLowerCase().includes('records') ||
+            channelTitle.toLowerCase().includes('music') ||
+            channelTitle.toLowerCase().includes('entertainment') ||
+            channelTitle.toLowerCase().includes('레코드') ||
+            channelTitle.toLowerCase().includes('뮤직') ||
+            channelTitle.toLowerCase().includes('엔터테인먼트');
+          
+          let channelType = 'user';
+          if (isOfficial) {
+            channelType = 'official';
+          } else if (isMusicLabel) {
+            channelType = 'label';
+          }
+          
+          channelInfoMap[channelId] = {
+            channelId: channelId,
+            channelTitle: channelTitle,
+            channelType: channelType,
+            isOfficial: isOfficial,
+            isMusicLabel: isMusicLabel
+          };
+        });
+      }
+      
+      // videoId별 채널 정보 매핑
+      const results = {};
+      videoIdsBatch.forEach(videoId => {
+        const channelId = videoIdToChannelId[videoId];
+        if (channelId && channelInfoMap[channelId]) {
+          results[videoId] = channelInfoMap[channelId];
+        } else {
+          results[videoId] = {
+            channelId: channelId || null,
+            channelTitle: null,
+            channelType: 'unknown',
+            isOfficial: false,
+            isMusicLabel: false
+          };
+        }
+      });
+      
+      socket.emit('channelInfoResults', results);
+    } catch (error) {
+      console.error('[getChannelInfo] 오류:', error);
+      socket.emit('channelInfoError', { 
+        message: '채널 정보 확인 실패: ' + error.message 
+      });
+    }
+  });
+
   // ============================================
   // 기존 이벤트 핸들러 (변경 없음)
   // ============================================
@@ -956,10 +1273,22 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     console.log('클라이언트 연결 해제:', socket.id);
     
-    // 제어권을 가진 세션이 해제되면 제어권 해제
-    if (controlSessionId === socket.id) {
-      controlSessionId = null;
-      console.log('제어권 해제됨 (세션 연결 해제)');
+    // 세션 ID와 socket.id 매핑 제거
+    const sessionId = socketToSessionMap.get(socket.id);
+    if (sessionId) {
+      socketToSessionMap.delete(socket.id);
+      // 같은 세션의 다른 socket.id가 없으면 매핑 제거
+      const currentSocketId = sessionToSocketMap.get(sessionId);
+      if (currentSocketId === socket.id) {
+        sessionToSocketMap.delete(sessionId);
+      }
+    }
+    
+    // 제어권을 가진 socket.id가 해제되면 제어권 해제 (세션 ID는 유지하여 재연결 시 복원 가능)
+    if (controlSocketId === socket.id) {
+      controlSocketId = null;
+      // 세션 ID는 유지 (재연결 시 복원 가능)
+      console.log('제어권 해제됨 (socket 연결 해제, 세션 ID는 유지):', controlSessionId);
       
       // 제어권 해제 시 상태 완전 초기화 (실제 재생 불가하므로)
       console.log('[disconnect] 제어권 해제로 인한 상태 초기화');
@@ -983,10 +1312,12 @@ io.on('connection', (socket) => {
         if (clientInfo && clientInfo.isAdmin && socketId !== socket.id) {
           const targetSocket = io.sockets.sockets.get(socketId);
           if (targetSocket) {
-            controlSessionId = socketId;
+            const sessionId = clientInfo.sessionId || socketToSessionMap.get(socketId) || socketId;
+            controlSessionId = sessionId;
+            controlSocketId = socketId;
             clientInfo.hasControl = true;
             controlTransferred = true;
-            console.log(`제어권 이전: ${socketId}`);
+            console.log(`제어권 이전: ${socketId} (세션: ${sessionId})`);
             targetSocket.emit('controlStatus', { hasControl: true });
             break;
           }
@@ -1217,9 +1548,11 @@ function playNextMusic(force = false) {
       if (clientInfo.isAdmin) {
         const targetSocket = io.sockets.sockets.get(socketId);
         if (targetSocket) {
-          controlSessionId = socketId;
+          const sessionId = clientInfo.sessionId || socketToSessionMap.get(socketId) || socketId;
+          controlSessionId = sessionId;
+          controlSocketId = socketId;
           clientInfo.hasControl = true;
-          console.log(`[playNextMusic] 제어권 자동 부여: ${socketId}`);
+          console.log(`[playNextMusic] 제어권 자동 부여: ${socketId} (세션: ${sessionId})`);
           targetSocket.emit('controlStatus', { hasControl: true });
           broadcastControlStatus();
           break;
@@ -1296,7 +1629,7 @@ function broadcastClientList() {
   // 각 클라이언트에 hasControl 정보 추가
   const clientList = Array.from(connectedClients.values()).map(clientInfo => ({
     ...clientInfo,
-    hasControl: controlSessionId === clientInfo.socketId
+    hasControl: hasControlBySocketId(clientInfo.socketId)
   }));
   // 모든 관리자에게 클라이언트 목록 전송
   io.sockets.sockets.forEach((sock) => {
@@ -1312,7 +1645,7 @@ function broadcastControlStatus() {
   io.sockets.sockets.forEach((sock) => {
     const clientInfo = connectedClients.get(sock.id);
     if (clientInfo && clientInfo.isAdmin) {
-      const hasControl = controlSessionId === sock.id;
+      const hasControl = hasControlBySocketId(sock.id);
       clientInfo.hasControl = hasControl;
       sock.emit('controlStatus', { hasControl: hasControl });
     }

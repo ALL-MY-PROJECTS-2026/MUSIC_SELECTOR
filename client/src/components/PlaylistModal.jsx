@@ -1,11 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import './PlaylistModal.css';
 
-function PlaylistModal({ isOpen, onClose, queue, socket, onLoadPlaylist }) {
+function PlaylistModal({ isOpen, onClose, queue, socket, onLoadPlaylist, hasControl = false }) {
   const [savedPlaylists, setSavedPlaylists] = useState([]);
   const [selectedPlaylist, setSelectedPlaylist] = useState(null);
   const [likedMusics, setLikedMusics] = useState([]);
   const [aiRecommendations, setAiRecommendations] = useState([]);
+  const [likedPage, setLikedPage] = useState(1);
+  const [aiPage, setAiPage] = useState(1);
+  const [showPlaylistSelector, setShowPlaylistSelector] = useState(false);
+  const [selectedMusic, setSelectedMusic] = useState(null);
+  const [newPlaylistName, setNewPlaylistName] = useState('');
+  const itemsPerPage = 5;
 
   // 모달이 열릴 때마다 좋아요 목록 및 AI 추천 노래 로드
   useEffect(() => {
@@ -13,6 +19,9 @@ function PlaylistModal({ isOpen, onClose, queue, socket, onLoadPlaylist }) {
       loadSavedPlaylists();
       loadLikedMusics();
       loadAIRecommendations();
+      // 페이징 초기화
+      setLikedPage(1);
+      setAiPage(1);
     }
   }, [isOpen]);
 
@@ -253,6 +262,119 @@ function PlaylistModal({ isOpen, onClose, queue, socket, onLoadPlaylist }) {
     }
   };
 
+  // AI 추천 노래 개별 삭제
+  const handleDeleteAIRecommendation = (videoId, e) => {
+    e.stopPropagation();
+    if (window.confirm('이 AI 추천 노래를 삭제하시겠습니까?')) {
+      try {
+        const stored = localStorage.getItem('aiRecommendations');
+        if (stored) {
+          const recommendations = JSON.parse(stored);
+          const filtered = recommendations.filter(rec => rec.videoId !== videoId);
+          localStorage.setItem('aiRecommendations', JSON.stringify(filtered));
+          loadAIRecommendations();
+        }
+      } catch (e) {
+        console.error('AI 추천 노래 삭제 오류:', e);
+        alert('AI 추천 노래 삭제에 실패했습니다.');
+      }
+    }
+  };
+
+  // AI 추천 노래 전체 삭제
+  const handleDeleteAllAIRecommendations = () => {
+    if (window.confirm('모든 AI 추천 노래를 삭제하시겠습니까?')) {
+      try {
+        localStorage.removeItem('aiRecommendations');
+        loadAIRecommendations();
+        alert('모든 AI 추천 노래가 삭제되었습니다.');
+      } catch (e) {
+        console.error('AI 추천 노래 전체 삭제 오류:', e);
+        alert('AI 추천 노래 전체 삭제에 실패했습니다.');
+      }
+    }
+  };
+
+  // 개별 노래를 플레이리스트에 저장 (플레이리스트 선택 모달 표시)
+  const handleSaveSingleMusic = (music, isAI = false) => {
+    setSelectedMusic({ ...music, isAI });
+    setNewPlaylistName(`${isAI ? 'AI 추천' : '좋아요'} 노래 ${new Date().toLocaleDateString()}`);
+    setShowPlaylistSelector(true);
+  };
+
+  // 플레이리스트 선택 및 노래 추가
+  const handleAddToPlaylist = (playlistId = null) => {
+    if (!selectedMusic) return;
+
+    const musicData = {
+      videoId: selectedMusic.videoId,
+      title: selectedMusic.title,
+      count: selectedMusic.isAI ? 0 : selectedMusic.count
+    };
+
+    try {
+      const stored = localStorage.getItem('savedPlaylists');
+      let playlists = stored ? JSON.parse(stored) : [];
+
+      if (playlistId) {
+        // 기존 플레이리스트에 추가
+        const playlistIndex = playlists.findIndex(p => p.id === playlistId);
+        if (playlistIndex !== -1) {
+          // 중복 체크
+          const existingIndex = playlists[playlistIndex].musics.findIndex(
+            m => m.videoId === musicData.videoId
+          );
+          if (existingIndex === -1) {
+            playlists[playlistIndex].musics.push(musicData);
+            playlists[playlistIndex].updatedAt = new Date().toISOString();
+            localStorage.setItem('savedPlaylists', JSON.stringify(playlists));
+            loadSavedPlaylists();
+            alert('플레이리스트에 노래가 추가되었습니다.');
+          } else {
+            alert('이미 플레이리스트에 있는 노래입니다.');
+          }
+        }
+      } else {
+        // 새 플레이리스트 생성
+        if (!newPlaylistName || !newPlaylistName.trim()) {
+          alert('플레이리스트 이름을 입력해주세요.');
+          return;
+        }
+
+        const newPlaylist = {
+          id: Date.now().toString(),
+          name: newPlaylistName.trim(),
+          musics: [musicData],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+
+        playlists.push(newPlaylist);
+        localStorage.setItem('savedPlaylists', JSON.stringify(playlists));
+        loadSavedPlaylists();
+        alert('새 플레이리스트가 생성되고 노래가 추가되었습니다.');
+      }
+
+      setShowPlaylistSelector(false);
+      setSelectedMusic(null);
+      setNewPlaylistName('');
+    } catch (e) {
+      console.error('플레이리스트 저장 오류:', e);
+      alert('플레이리스트 저장에 실패했습니다.');
+    }
+  };
+
+  // 페이징 계산 함수
+  const getPagedData = (data, page) => {
+    const startIndex = (page - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    return data.slice(startIndex, endIndex);
+  };
+
+  const getTotalPages = (data) => {
+    return Math.ceil(data.length / itemsPerPage);
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -269,58 +391,152 @@ function PlaylistModal({ isOpen, onClose, queue, socket, onLoadPlaylist }) {
           <div className="playlist-section">
             <div className="playlist-section-header">
               <h3>현재 좋아요한 노래 ({likedMusics.length}개)</h3>
-              <button className="save-playlist-btn" onClick={handleSavePlaylist}>
-                <span className="material-icons">save</span>
-                저장하기
-              </button>
+              <div className="playlist-header-actions">
+                {likedMusics.length > 0 && (
+                  <div className="pagination-controls">
+                    <button 
+                      className="pagination-btn"
+                      onClick={() => setLikedPage(prev => Math.max(1, prev - 1))}
+                      disabled={likedPage === 1}
+                    >
+                      <span className="material-icons">chevron_left</span>
+                    </button>
+                    <span className="pagination-info">
+                      {likedPage} / {getTotalPages(likedMusics)}
+                    </span>
+                    <button 
+                      className="pagination-btn"
+                      onClick={() => setLikedPage(prev => Math.min(getTotalPages(likedMusics), prev + 1))}
+                      disabled={likedPage >= getTotalPages(likedMusics)}
+                    >
+                      <span className="material-icons">chevron_right</span>
+                    </button>
+                  </div>
+                )}
+                <button 
+                  className="save-playlist-btn icon-only" 
+                  onClick={handleSavePlaylist}
+                  title="저장하기"
+                >
+                  <span className="material-icons">save</span>
+                </button>
+              </div>
             </div>
             <div className="liked-musics-list">
               {likedMusics.length === 0 ? (
                 <p className="empty-message">좋아요한 노래가 없습니다.</p>
               ) : (
-                likedMusics.map((music, index) => (
-                  <div key={music.videoId} className="liked-music-item">
-                    <div className="liked-music-rank">{index + 1}</div>
-                    <div className="liked-music-info">
-                      <div className="liked-music-title">{music.title}</div>
-                      <div className="liked-music-count">
-                        <span className="material-icons">favorite</span>
-                        <span>{music.count}</span>
+                getPagedData(likedMusics, likedPage).map((music, index) => {
+                  const globalIndex = (likedPage - 1) * itemsPerPage + index;
+                  return (
+                    <div key={music.videoId} className="liked-music-item">
+                      <button 
+                        className="save-single-music-btn"
+                        onClick={() => handleSaveSingleMusic(music, false)}
+                        title="플레이리스트에 저장"
+                      >
+                        <span className="material-icons">playlist_add</span>
+                      </button>
+                      <div className="liked-music-rank">{globalIndex + 1}</div>
+                      <div className="liked-music-info">
+                        <div className="liked-music-title">{music.title}</div>
+                        <div className="liked-music-count">
+                          <span className="material-icons">favorite</span>
+                          <span>{music.count}</span>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>
 
-          <div className="playlist-section">
-            <div className="playlist-section-header">
-              <h3>AI 추천노래 ({aiRecommendations.length}개)</h3>
-              <button className="save-playlist-btn" onClick={handleSaveAIRecommendationsPlaylist}>
-                <span className="material-icons">save</span>
-                저장하기
-              </button>
-            </div>
-            <div className="liked-musics-list">
-              {aiRecommendations.length === 0 ? (
-                <p className="empty-message">AI 추천 노래가 없습니다.</p>
-              ) : (
-                aiRecommendations.map((music, index) => (
-                  <div key={music.videoId} className="liked-music-item">
-                    <div className="liked-music-rank">{index + 1}</div>
-                    <div className="liked-music-info">
-                      <div className="liked-music-title">{music.title}</div>
-                      <div className="liked-music-count">
-                        <span className="material-icons">auto_awesome</span>
-                        <span>AI 추천</span>
+          {/* 제어권 있는 위치에서만 AI 추천 노래 섹션 표시 */}
+          {hasControl && (
+            <div className="playlist-section">
+              <div className="playlist-section-header">
+                <h3>AI 추천노래 ({aiRecommendations.length}개)</h3>
+                <div className="playlist-header-actions">
+                  {aiRecommendations.length > 0 && (
+                    <>
+                      <div className="pagination-controls">
+                        <button 
+                          className="pagination-btn"
+                          onClick={() => setAiPage(prev => Math.max(1, prev - 1))}
+                          disabled={aiPage === 1}
+                        >
+                          <span className="material-icons">chevron_left</span>
+                        </button>
+                        <span className="pagination-info">
+                          {aiPage} / {getTotalPages(aiRecommendations)}
+                        </span>
+                        <button 
+                          className="pagination-btn"
+                          onClick={() => setAiPage(prev => Math.min(getTotalPages(aiRecommendations), prev + 1))}
+                          disabled={aiPage >= getTotalPages(aiRecommendations)}
+                        >
+                          <span className="material-icons">chevron_right</span>
+                        </button>
                       </div>
-                    </div>
-                  </div>
-                ))
-              )}
+                      <button 
+                        className="delete-all-btn icon-only" 
+                        onClick={handleDeleteAllAIRecommendations}
+                        title="전체 삭제"
+                      >
+                        <span className="material-icons">delete_sweep</span>
+                      </button>
+                    </>
+                  )}
+                  <button 
+                    className="save-playlist-btn icon-only" 
+                    onClick={handleSaveAIRecommendationsPlaylist}
+                    title="저장하기"
+                  >
+                    <span className="material-icons">save</span>
+                  </button>
+                </div>
+              </div>
+              <div className="liked-musics-list">
+                {aiRecommendations.length === 0 ? (
+                  <p className="empty-message">AI 추천 노래가 없습니다.</p>
+                ) : (
+                  getPagedData(aiRecommendations, aiPage).map((music, index) => {
+                    const globalIndex = (aiPage - 1) * itemsPerPage + index;
+                    return (
+                      <div key={music.videoId} className="liked-music-item ai-recommendation-item">
+                        <div className="ai-recommendation-label">
+                          <span className="material-icons">auto_awesome</span>
+                          <span>AI 추천</span>
+                        </div>
+                        <div className="liked-music-info">
+                          <div className="liked-music-title">{music.title}</div>
+                        </div>
+                        <div className="ai-recommendation-actions">
+                          <button 
+                            className="save-single-music-btn icon-only"
+                            onClick={() => handleSaveSingleMusic(music, true)}
+                            title="플레이리스트에 저장"
+                          >
+                            <span className="material-icons">add</span>
+                          </button>
+                          {hasControl && (
+                            <button 
+                              className="delete-single-music-btn icon-only"
+                              onClick={(e) => handleDeleteAIRecommendation(music.videoId, e)}
+                              title="삭제"
+                            >
+                              <span className="material-icons">close</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="playlist-section">
             <div className="playlist-section-header">
@@ -367,6 +583,85 @@ function PlaylistModal({ isOpen, onClose, queue, socket, onLoadPlaylist }) {
           </div>
         </div>
       </div>
+
+      {/* 플레이리스트 선택 모달 */}
+      {showPlaylistSelector && (
+        <div className="playlist-selector-overlay" onClick={() => {
+          setShowPlaylistSelector(false);
+          setSelectedMusic(null);
+          setNewPlaylistName('');
+        }}>
+          <div className="playlist-selector-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="playlist-selector-header">
+              <h3>플레이리스트 선택</h3>
+              <button 
+                className="playlist-selector-close"
+                onClick={() => {
+                  setShowPlaylistSelector(false);
+                  setSelectedMusic(null);
+                  setNewPlaylistName('');
+                }}
+              >
+                <span className="material-icons">close</span>
+              </button>
+            </div>
+            <div className="playlist-selector-content">
+              <div className="playlist-selector-info">
+                <p>추가할 노래: <strong>{selectedMusic?.title}</strong></p>
+              </div>
+              
+              {savedPlaylists.length > 0 && (
+                <div className="playlist-selector-list">
+                  <h4>기존 플레이리스트</h4>
+                  <div className="playlist-selector-items">
+                    {savedPlaylists.map(playlist => (
+                      <div
+                        key={playlist.id}
+                        className="playlist-selector-item"
+                        onClick={() => handleAddToPlaylist(playlist.id)}
+                      >
+                        <span className="material-icons">queue_music</span>
+                        <div className="playlist-selector-item-info">
+                          <div className="playlist-selector-item-name">{playlist.name}</div>
+                          <div className="playlist-selector-item-meta">
+                            {playlist.musics.length}개 곡
+                          </div>
+                        </div>
+                        <span className="material-icons">chevron_right</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="playlist-selector-new">
+                <h4>새 플레이리스트 만들기</h4>
+                <div className="playlist-selector-new-input">
+                  <input
+                    type="text"
+                    value={newPlaylistName}
+                    onChange={(e) => setNewPlaylistName(e.target.value)}
+                    placeholder="플레이리스트 이름을 입력하세요"
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter') {
+                        handleAddToPlaylist(null);
+                      }
+                    }}
+                  />
+                  <button
+                    className="playlist-selector-create-btn"
+                    onClick={() => handleAddToPlaylist(null)}
+                    disabled={!newPlaylistName || !newPlaylistName.trim()}
+                  >
+                    <span className="material-icons">add</span>
+                    만들기
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

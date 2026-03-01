@@ -41,6 +41,40 @@ class YoutubeService {
         // 제목과 썸네일 정보 추출
         const title = item.title || query;
         
+        // 쇼츠 제외 (제목에 #shorts 또는 shorts 포함, 또는 재생 시간이 1분 이하)
+        const titleLower = title.toLowerCase();
+        const isShorts = titleLower.includes('#shorts') || 
+                        titleLower.includes('shorts') ||
+                        titleLower.includes('쇼츠');
+        
+        // 재생 시간이 1분 이하인지 확인 (쇼츠는 보통 1분 이하)
+        let isShortDuration = false;
+        if (duration) {
+          const durationStr = duration.toString();
+          const parts = durationStr.split(':');
+          if (parts.length >= 2) {
+            let totalSeconds = 0;
+            if (parts.length === 3) {
+              // HH:MM:SS 형식
+              totalSeconds = parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60 + parseInt(parts[2], 10);
+            } else if (parts.length === 2) {
+              // MM:SS 형식
+              totalSeconds = parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+            }
+            const minutes = totalSeconds / 60;
+            // 1분 이하이면 쇼츠로 간주 (단, 1분 이상인 쇼츠도 있으므로 제목 확인 우선)
+            if (minutes <= 1) {
+              isShortDuration = true;
+            }
+          }
+        }
+        
+        // 쇼츠 제외 (제목에 쇼츠 키워드가 있거나, 1분 이하이면서 제목에 쇼츠 관련 키워드가 있는 경우)
+        if (isShorts || (isShortDuration && (titleLower.includes('short') || titleLower.includes('쇼츠')))) {
+          console.log(`[YoutubeService] 쇼츠 제외: "${title}" (재생시간: ${duration})`);
+          continue;
+        }
+        
         // 썸네일 URL 추출 (여러 형식 지원)
         let thumbnail = null;
         if (item.thumbnail) {
@@ -77,28 +111,93 @@ class YoutubeService {
           );
           
           const validation = await Promise.race([validationPromise, timeoutPromise]);
-          return { item, validation, isValid: validation.valid };
+          // 검증 결과가 false이면 재생 불가능한 것으로 간주
+          return { item, validation, isValid: validation.valid === true };
         } catch (error) {
-          // 타임아웃이나 오류 발생 시 일단 허용 (검증 실패를 막지 않음)
-          // 네트워크 문제로 검증이 실패할 수 있으므로, 일단 허용하고 재생 시도
-          console.log(`영상 검증 타임아웃/오류 (일단 허용): ${item.title} (${item.videoId}) - ${error.message}`);
-          return { item, validation: { valid: true, warning: '검증 시간 초과 - 재생 시도' }, isValid: true };
+          // 타임아웃이나 오류 발생 시 재생 불가능한 것으로 간주 (안전하게 필터링)
+          console.log(`영상 검증 타임아웃/오류 (재생 불가능으로 간주): ${item.title} (${item.videoId}) - ${error.message}`);
+          return { item, validation: { valid: false, reason: '검증 시간 초과 또는 오류 발생' }, isValid: false };
         }
       });
 
       const validatedResults = await Promise.all(validationPromises);
       
-      // 재생 가능한 것만 필터링
-      const searchResults = validatedResults
+      // 재생 가능한 것만 필터링 (oEmbed 검증 통과)
+      let searchResults = validatedResults
         .filter(result => result.isValid)
-        .map(result => result.item)
-        .slice(0, maxResults); // 최대 개수만큼만 반환
+        .map(result => result.item);
 
-      const filteredCount = validatedResults.length - searchResults.length;
-      if (filteredCount > 0) {
-        console.log(`재생 불가능한 영상 ${filteredCount}개 필터링됨`);
+      // YouTube Data API를 사용한 추가 재생 가능 여부 확인 (더 강력한 검증)
+      if (process.env.YOUTUBE_API_KEY && searchResults.length > 0) {
+        try {
+          const google = require('googleapis');
+          const youtube = google.youtube('v3');
+          
+          // 배치로 videoId 수집
+          const videoIds = searchResults.map(item => item.videoId).slice(0, 50); // 최대 50개
+          
+          // YouTube Data API로 status 확인
+          const response = await youtube.videos.list({
+            key: process.env.YOUTUBE_API_KEY,
+            part: 'status',
+            id: videoIds.join(',')
+          });
+          
+          // 재생 가능한 videoId Set 생성
+          const playableVideoIds = new Set();
+          if (response.data.items) {
+            response.data.items.forEach(item => {
+              // 재생 가능 조건:
+              // 1. embeddable이 true (또는 undefined - 기본값 true)
+              // 2. privacyStatus가 'public'
+              // 3. uploadStatus가 'processed'
+              const isPlayable = item.status && 
+                               item.status.embeddable !== false && 
+                               item.status.privacyStatus === 'public' &&
+                               item.status.uploadStatus === 'processed';
+              
+              if (isPlayable) {
+                playableVideoIds.add(item.id);
+              } else {
+                console.log(`[YoutubeService] YouTube Data API로 재생 불가능 확인: ${item.id} (embeddable: ${item.status?.embeddable}, privacy: ${item.status?.privacyStatus}, upload: ${item.status?.uploadStatus})`);
+              }
+            });
+          }
+          
+          // YouTube Data API 결과로 필터링
+          const beforeApiFilterCount = searchResults.length;
+          searchResults = searchResults.filter(item => {
+            // API에서 확인된 경우에만 필터링, 확인되지 않은 경우는 oEmbed 검증 결과 유지
+            if (playableVideoIds.has(item.videoId)) {
+              return true; // 재생 가능
+            } else if (playableVideoIds.size > 0) {
+              // API 응답이 있었는데 이 videoId가 없으면 재생 불가능
+              console.log(`[YoutubeService] YouTube Data API로 재생 불가능 필터링: ${item.title} (${item.videoId})`);
+              return false;
+            } else {
+              // API 응답이 없으면 oEmbed 검증 결과 유지
+              return true;
+            }
+          });
+          
+          const apiFilteredCount = beforeApiFilterCount - searchResults.length;
+          if (apiFilteredCount > 0) {
+            console.log(`[YoutubeService] YouTube Data API로 재생 불가능한 영상 ${apiFilteredCount}개 추가 필터링됨`);
+          }
+        } catch (apiError) {
+          console.warn('[YoutubeService] YouTube Data API 검증 실패, oEmbed 검증 결과만 사용:', apiError.message);
+          // API 호출 실패 시 oEmbed 검증 결과만 사용
+        }
       }
-      console.log(`검색 결과 ${searchResults.length}개 반환 (재생 가능한 영상만)`);
+      
+      // 최종 결과 반환 (최대 개수만큼만)
+      searchResults = searchResults.slice(0, maxResults);
+      
+      const totalFilteredCount = validatedResults.length - searchResults.length;
+      if (totalFilteredCount > 0) {
+        console.log(`[YoutubeService] 총 재생 불가능한 영상 ${totalFilteredCount}개 필터링됨`);
+      }
+      console.log(`[YoutubeService] 검색 결과 ${searchResults.length}개 반환 (재생 가능한 영상만)`);
 
       return searchResults;
     } catch (error) {
@@ -296,13 +395,13 @@ class YoutubeService {
     } catch (error) {
       console.error('영상 검증 오류:', error);
       
-      // 타임아웃이나 네트워크 오류의 경우, 일단 허용하되 경고 표시
+      // 타임아웃이나 네트워크 오류의 경우, 재생 불가능한 것으로 간주 (안전하게 필터링)
       if (error.message && error.message.includes('시간 초과')) {
         return { valid: false, reason: '영상 검증 시간이 초과되었습니다. 네트워크 연결을 확인해주세요.' };
       }
       
-      // 기타 오류는 경고만 표시하고 계속 진행
-      return { valid: true, warning: '영상 검증 중 오류가 발생했지만 계속 진행합니다.' };
+      // 기타 오류도 재생 불가능한 것으로 간주 (안전하게 필터링)
+      return { valid: false, reason: '영상 검증 중 오류가 발생했습니다. 재생 불가능할 수 있습니다.' };
     }
   }
 }

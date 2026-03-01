@@ -12,11 +12,11 @@ class RecommendationService {
   }
 
   /**
-   * 상위 하트 음악 선택
+   * 상위 하트 음악 선택 (하트가 없으면 대기열 순서 기준)
    * @param {Array} queue - 대기열
    * @param {Object} musicLikes - 좋아요 데이터 { videoId: count }
    * @param {number} topN - 상위 N개
-   * @returns {Array} 상위 하트 음악 배열
+   * @returns {Array} 상위 하트 음악 배열 (하트가 없으면 대기열 순서 기준)
    */
   getTopLikedSongs(queue, musicLikes, topN = 10) {
     if (!queue || queue.length === 0) {
@@ -24,18 +24,31 @@ class RecommendationService {
     }
 
     // 좋아요 개수 기준으로 정렬
-    const songsWithLikes = queue.map(music => ({
+    const songsWithLikes = queue.map((music, index) => ({
       ...music,
       likeCount: musicLikes[music.videoId] || 0,
+      queueIndex: index, // 대기열 순서 저장
     }));
 
-    // 좋아요 개수 내림차순 정렬, 같으면 최신순
-    songsWithLikes.sort((a, b) => {
-      if (b.likeCount !== a.likeCount) {
-        return b.likeCount - a.likeCount;
-      }
-      return (b.timestamp || 0) - (a.timestamp || 0);
-    });
+    // 전체 좋아요 개수 확인
+    const totalLikes = songsWithLikes.reduce((sum, song) => sum + song.likeCount, 0);
+    const hasLikes = totalLikes > 0;
+
+    if (hasLikes) {
+      // 하트가 있는 경우: 좋아요 개수 기준으로 정렬
+      songsWithLikes.sort((a, b) => {
+        if (b.likeCount !== a.likeCount) {
+          return b.likeCount - a.likeCount;
+        }
+        return (b.timestamp || 0) - (a.timestamp || 0);
+      });
+    } else {
+      // 하트가 없는 경우: 대기열 순서 기준으로 정렬 (앞에 있는 곡 우선)
+      songsWithLikes.sort((a, b) => {
+        return a.queueIndex - b.queueIndex;
+      });
+      console.log('[RecommendationService] 하트가 없어 대기열 순서 기준으로 추천합니다.');
+    }
 
     // 상위 N개 선택
     return songsWithLikes.slice(0, Math.min(topN, songsWithLikes.length));
@@ -75,22 +88,52 @@ class RecommendationService {
       recencyScore = Math.max(0, 1 - daysSincePublished / (365 * 2));
     }
 
-    // 조회수 점수 × 0.8 + 최신도 점수 × 0.2 (조회수에 더 높은 가중치)
-    return normalizedViewCount * 0.8 + recencyScore * 0.2;
+    // 조회수 점수 × 0.9 + 최신도 점수 × 0.1 (조회수에 더 높은 가중치 강화)
+    return normalizedViewCount * 0.9 + recencyScore * 0.1;
   }
 
   /**
-   * 아티스트 일치 점수 계산
+   * 아티스트 일치 점수 계산 (유사도 포함)
    * @param {string} artist1 - 첫 번째 아티스트
    * @param {string} artist2 - 두 번째 아티스트
-   * @returns {number} 일치 점수 (0 또는 1)
+   * @returns {number} 일치 점수 (0~1, 1.0=완전 일치, 0.8 이상=유사)
    */
   calculateArtistMatch(artist1, artist2) {
     if (!artist1 || !artist2) return 0;
     
-    // 간단한 문자열 비교 (대소문자 무시)
-    const normalize = (str) => str.toLowerCase().trim();
-    return normalize(artist1) === normalize(artist2) ? 1.0 : 0.0;
+    // 정규화 (대소문자 무시, 공백 제거)
+    const normalize = (str) => str.toLowerCase().trim().replace(/\s+/g, '');
+    const norm1 = normalize(artist1);
+    const norm2 = normalize(artist2);
+    
+    // 완전 일치
+    if (norm1 === norm2) return 1.0;
+    
+    // 한 아티스트가 다른 아티스트를 포함하는지 확인 (예: "JungKey" vs "정키(JungKey)")
+    if (norm1.includes(norm2) || norm2.includes(norm1)) {
+      const shorter = norm1.length < norm2.length ? norm1 : norm2;
+      const longer = norm1.length >= norm2.length ? norm1 : norm2;
+      const ratio = shorter.length / longer.length;
+      if (ratio >= 0.7) { // 70% 이상 포함되면 유사한 가수로 간주
+        return 0.8;
+      }
+    }
+    
+    // Jaccard 유사도 계산 (간단한 버전)
+    const set1 = new Set([...norm1]);
+    const set2 = new Set([...norm2]);
+    const intersection = new Set([...set1].filter(x => set2.has(x)));
+    const union = new Set([...set1, ...set2]);
+    
+    if (union.size === 0) return 0.0;
+    const similarity = intersection.size / union.size;
+    
+    // 유사도가 0.6 이상이면 유사한 가수로 간주
+    if (similarity >= 0.6) {
+      return 0.8;
+    }
+    
+    return 0.0;
   }
 
   /**
@@ -99,18 +142,105 @@ class RecommendationService {
    * @param {number} artistMatch - 아티스트 일치 (0 또는 1)
    * @param {number} popularityScore - 인기도 점수 (0~1)
    * @param {number} diversityBonus - 다양성 보너스 (0~1, 기본값 0)
+   * @param {number} genreMatch - 장르 일치 (0 또는 1, 기본값 0)
+   * @param {string} musicRegion - 음악 지역 기준 ('all', 'domestic', 'international')
    * @returns {number} 최종 점수
    */
-  calculateFinalScore(similarity, artistMatch, popularityScore, diversityBonus = 0, genreMatch = 0) {
-    // 우선순위: 1. 아티스트 일치, 2. 인기도, 3. 텍스트 유사도, 4. 아티스트 다양성, 5. 장르 일치
-    // 같은 가수의 인기 있는 다른 노래 추천 + 다른 가수의 유사한 노래도 추천
-    return (
-      artistMatch * 0.40 + // 1순위: 아티스트 일치 (45% → 40%) - 최우선
-      popularityScore * 0.30 + // 2순위: 인기도 (30% 유지)
-      similarity * 0.15 + // 3순위: 텍스트 유사도 (15% 유지)
-      diversityBonus * 0.10 + // 4순위: 아티스트 다양성 (5% → 10%) - 증가
-      genreMatch * 0.05 // 5순위: 장르 일치 (5% 유지)
-    );
+  /**
+   * 음질 보너스 계산 (스튜디오 버전, 공식 버전 등 우선)
+   * @param {string} title - 제목
+   * @returns {number} 음질 보너스 (0~1)
+   */
+  calculateQualityBonus(title) {
+    if (!title) return 0;
+    
+    const titleLower = title.toLowerCase();
+    
+    // 음질 좋은 버전 키워드 (높은 점수)
+    const highQualityKeywords = [
+      'studio', 'studio version', 'studio recording',
+      '스튜디오', '스튜디오 버전', '스튜디오 녹음',
+      'official', 'official audio', 'official video',
+      '공식', '공식 오디오', '공식 영상',
+      'original', 'original version', 'original recording',
+      '오리지널', '오리지널 버전', '원곡',
+      'album version', 'album track',
+      '앨범 버전', '앨범 트랙',
+      'cd version', 'cd quality',
+      'cd 버전', 'cd 품질',
+      'hq', 'high quality', 'hq audio',
+      '고음질', '고품질',
+      'master', 'mastered', 'master recording',
+      '마스터', '마스터링',
+    ];
+    
+    // 음질 낮은 버전 키워드 (점수 감소)
+    const lowQualityKeywords = [
+      'live', 'concert', 'performance', 'stage',
+      '라이브', '공연', '무대', '콘서트',
+      'venue', 'arena', 'stadium', 'hall',
+      '공연장', '경기장', '체육관', '홀',
+      'competition', 'contest', 'audition',
+      '대회', '경연', '오디션',
+      'fan cam', 'fancam', 'phone recording',
+      '팬캠', '팬 캠', '핸드폰 녹음',
+      'audience recording', 'crowd recording',
+      '관중 녹음', '군중 녹음',
+    ];
+    
+    // 높은 음질 키워드 확인
+    for (const keyword of highQualityKeywords) {
+      if (titleLower.includes(keyword)) {
+        return 1.0; // 최고 점수
+      }
+    }
+    
+    // 낮은 음질 키워드 확인
+    for (const keyword of lowQualityKeywords) {
+      if (titleLower.includes(keyword)) {
+        return 0.0; // 점수 없음 (이미 필터링되어야 하지만 추가 보너스 없음)
+      }
+    }
+    
+    // 키워드가 없으면 기본값 (0.5 - 중간 점수)
+    return 0.5;
+  }
+
+  calculateFinalScore(similarity, artistMatch, popularityScore, diversityBonus = 0, genreMatch = 0, musicRegion = 'all', qualityBonus = 0, channelPriority = 0.5) {
+    if (musicRegion === 'domestic') {
+      // 국내: 하트 많은 가수 노래 위주, 음질 좋은 것 우선, 공식 채널 우선
+      return (
+        artistMatch * 0.60 + // 1순위: 하트 많은 동일 가수 (60% - 증가)
+        qualityBonus * 0.15 + // 2순위: 음질 보너스 (스튜디오, 공식 버전 등) (15% - 감소)
+        channelPriority * 0.10 + // 3순위: 채널 우선순위 (공식 채널 우선) (10% - 감소)
+        popularityScore * 0.10 + // 4순위: 조회수 높은 노래 (10% - 감소)
+        genreMatch * 0.03 + // 5순위: 유사 장르 (3% - 감소)
+        similarity * 0.02 + // 6순위: 텍스트 유사도 (2%)
+        diversityBonus * 0.00 // 7순위: 아티스트 다양성 (0% - 제거)
+      );
+    } else if (musicRegion === 'international') {
+      // 해외: 하트 많은 가수 노래 위주, 음질 좋은 것 우선, 공식 채널 우선
+      return (
+        artistMatch * 0.55 + // 1순위: 하트 많은 동일 가수 (55% - 증가)
+        qualityBonus * 0.20 + // 2순위: 음질 보너스 (20% - 감소)
+        channelPriority * 0.10 + // 3순위: 채널 우선순위 (공식 채널 우선) (10% - 감소)
+        popularityScore * 0.10 + // 4순위: 조회수 높은 노래 (10% - 감소)
+        genreMatch * 0.03 + // 5순위: 동일 장르 (3%)
+        similarity * 0.01 + // 6순위: 텍스트 유사도 (1%)
+        diversityBonus * 0.01 // 7순위: 아티스트 다양성 (1% - 감소)
+      );
+    } else {
+      // 전체: 하트 많은 가수 노래 위주, 음질 좋은 것 우선, 공식 채널 우선
+      return (
+        artistMatch * 0.60 + // 1순위: 하트 많은 동일 가수 (60% - 증가)
+        qualityBonus * 0.15 + // 2순위: 음질 보너스 (15% - 감소)
+        channelPriority * 0.10 + // 3순위: 채널 우선순위 (공식 채널 우선) (10% - 감소)
+        popularityScore * 0.10 + // 4순위: 인기도 (10% - 감소)
+        similarity * 0.04 + // 5순위: 텍스트 유사도 (4% - 감소)
+        genreMatch * 0.01 + // 6순위: 장르 일치 (1%)
+        diversityBonus * 0.00 // 7순위: 아티스트 다양성 (0% - 제거)
+      );
+    }
   }
 
   /**
@@ -174,13 +304,24 @@ class RecommendationService {
   extractArtist(title) {
     if (!title) return null;
     
+    // 대괄호로 시작하는 부분 제거 (예: "[BALLAD]", "[MV]" 등)
+    let cleanedTitle = title.replace(/^\[[^\]]+\]\s*/i, '').trim();
+    
+    // '가수명 - 제목' 형식에서 가수명 추출 (가장 일반적인 형식)
     // 다양한 구분자로 아티스트 추출 시도
-    const separators = [/[-–—]/, / by /i, / \| /, / \/ /];
+    const separators = [/[-–—]\s*/, / by /i, / \| /, / \/ /];
     
     for (const sep of separators) {
-      const parts = title.split(sep);
+      const parts = cleanedTitle.split(sep);
       if (parts.length > 1) {
-        const artist = parts[parts.length - 1].trim();
+        // 첫 번째 부분이 가수명 (일반적으로 '가수명 - 제목' 형식)
+        let artist = parts[0].trim();
+        
+        // 괄호 안의 내용 제거 (예: "이우 (LeeWoo)" → "이우", "이우(LEEWOO)" → "이우")
+        // 단, 괄호 안이 영어/한글 혼합인 경우는 영어 부분만 제거
+        artist = artist.replace(/\s*\([^)]*\)/g, '').trim();
+        artist = artist.replace(/\s*\[[^\]]*\]/g, '').trim();
+        
         if (artist.length > 0 && artist.length < 50) { // 합리적인 길이
           return artist;
         }
@@ -188,6 +329,56 @@ class RecommendationService {
     }
     
     return null;
+  }
+  
+  /**
+   * 가수명 정규화 (비교용)
+   * 괄호, 대괄호, 공백 제거하고 핵심 가수명만 추출
+   * @param {string} artist - 가수명
+   * @returns {string} 정규화된 가수명
+   */
+  normalizeArtistName(artist) {
+    if (!artist) return '';
+    
+    // 소문자 변환
+    let normalized = artist.toLowerCase().trim();
+    
+    // 괄호, 대괄호 제거
+    normalized = normalized.replace(/[()\[\]]/g, '');
+    
+    // 공백 제거
+    normalized = normalized.replace(/\s+/g, '');
+    
+    // 특수 문자 제거 (하이픈, 슬래시 등)
+    normalized = normalized.replace(/[-–—\/\|]/g, '');
+    
+    return normalized;
+  }
+
+  /**
+   * 제목에서 노래 제목만 추출 (가수명 제외)
+   * @param {string} title - 전체 제목 (예: "가수명 - 제목")
+   * @returns {string} 노래 제목만 (가수명 제외)
+   */
+  extractSongTitle(title) {
+    if (!title) return '';
+    
+    // '가수명 - 제목' 형식에서 제목만 추출
+    const separators = [/[-–—]\s*/, / by /i, / \| /, / \/ /];
+    
+    for (const sep of separators) {
+      const parts = title.split(sep);
+      if (parts.length > 1) {
+        // 두 번째 부분부터가 제목 (나머지 부분 합치기)
+        const songTitle = parts.slice(1).join(' ').trim();
+        if (songTitle.length > 0) {
+          return songTitle;
+        }
+      }
+    }
+    
+    // 구분자가 없으면 전체를 제목으로 간주
+    return title.trim();
   }
 
   /**
@@ -223,34 +414,214 @@ class RecommendationService {
   }
 
   /**
+   * 국내 음악인지 판단 (한국 가수 기준)
+   * @param {string} title - 제목
+   * @param {string} artist - 아티스트 이름 (선택적)
+   * @param {Object} channelInfo - 채널 정보 (선택적)
+   * @returns {boolean} 국내 음악이면 true
+   */
+  isDomesticMusic(title, artist = null, channelInfo = null) {
+    if (!title) return false;
+    
+    const koreanRegex = /[가-힣]/;
+    
+    // 채널 정보가 있으면 채널 정보 우선 확인
+    if (channelInfo) {
+      const channelTitle = channelInfo.channelTitle || '';
+      const channelTitleLower = channelTitle.toLowerCase();
+      
+      // 채널 제목에 한국어가 있으면 한국 채널로 판단
+      if (koreanRegex.test(channelTitle)) {
+        // 한국어가 있지만 외국 가수 채널일 수 있으므로 추가 확인
+        // 외국 가수 채널 키워드 확인
+        const foreignChannelKeywords = [
+          'vevo', 'vevo official', 'official vevo',
+          'warner', 'sony', 'universal', 'emi',
+          'atlantic', 'republic', 'interscope',
+          'capitol', 'def jam', 'island', 'motown'
+        ];
+        
+        // 외국 가수 채널 키워드가 있으면 제외
+        const hasForeignKeyword = foreignChannelKeywords.some(keyword => 
+          channelTitleLower.includes(keyword)
+        );
+        
+        if (hasForeignKeyword) {
+          return false; // 외국 가수 채널
+        }
+        
+        // 한국어가 있고 외국 키워드가 없으면 한국 채널로 판단
+        return true;
+      }
+    }
+    
+    // 아티스트 이름이 있으면 아티스트 기준으로 판단 (우선순위)
+    if (artist) {
+      const artistHasKorean = koreanRegex.test(artist);
+      
+      // 아티스트 이름에 한글이 있으면 한국 가수로 판단
+      if (artistHasKorean) {
+        return true;
+      }
+      
+      // 아티스트 이름에 한글이 없으면 외국 가수로 판단
+      // 제목에 한글이 있어도 외국 가수가 부른 한국 노래일 수 있으므로 false
+      return false;
+    }
+    
+    // 아티스트 정보가 없으면 제목에서 아티스트 추출 시도
+    const extractedArtist = this.extractArtist(title);
+    if (extractedArtist) {
+      const extractedHasKorean = koreanRegex.test(extractedArtist);
+      
+      // 추출된 아티스트에 한글이 있으면 한국 가수로 판단
+      if (extractedHasKorean) {
+        return true;
+      }
+      
+      // 추출된 아티스트에 한글이 없으면 외국 가수로 판단
+      return false;
+    }
+    
+    // 아티스트를 추출할 수 없으면 제목 기준으로 판단 (폴백)
+    // 단, 이 경우는 정확도가 낮을 수 있으므로 엄격하게 판단
+    const hasKorean = koreanRegex.test(title);
+    
+    // K-pop, Korean 등의 키워드가 있으면 국내
+    const koreanKeywords = ['k-pop', 'kpop', 'korean', '케이팝'];
+    const hasKoreanKeyword = koreanKeywords.some(keyword => 
+      title.toLowerCase().includes(keyword)
+    );
+    
+    // 한글이 있거나 한국 키워드가 있으면 국내로 판단
+    // 하지만 아티스트 정보가 없으면 신뢰도가 낮으므로 false 반환 (더 엄격하게)
+    return false; // 아티스트 정보가 없으면 판단 불가로 간주
+  }
+
+  /**
    * 다양한 검색 쿼리 생성
    * @param {Array} topSongs - 상위 하트 음악 배열
+   * @param {string} musicRegion - 음악 지역 기준 ('all', 'domestic', 'international')
+   * @param {Set} previousArtists - 이전 추천 가수명 (정규화된 버전, 제외할 가수명)
    * @returns {Array<string>} 검색 쿼리 배열
    */
-  generateDiverseSearchQueries(topSongs) {
+  generateDiverseSearchQueries(topSongs, musicRegion = 'all', previousArtists = new Set()) {
     const queries = [];
     
-    // 1. 제목 기반 검색 (기존 방식)
-    const titleQuery = topSongs
+    // 1. 아티스트 기반 검색 (우선순위: 대기열에 있는 가수들의 노래 우선)
+    // 단, 이전 추천 가수명과 일치하는 가수는 제외
+    let artists = topSongs
+      .map(song => {
+        const artist = this.extractArtist(song.title);
+        if (!artist) return null;
+        
+        // 이전 추천 가수명과 일치하는지 확인
+        const normalizedArtist = this.normalizeArtistName(artist);
+        if (normalizedArtist && previousArtists.has(normalizedArtist)) {
+          console.log(`[RecommendationService] 검색 쿼리에서 제외할 가수: "${artist}" (정규화: "${normalizedArtist}")`);
+          return null; // 이전 추천 가수명과 일치하면 제외
+        }
+        
+        return artist;
+      })
+      .filter(Boolean)
+      .filter((artist, index, self) => self.indexOf(artist) === index) // 중복 제거
+      .slice(0, 5); // 더 많은 아티스트 포함
+    
+    // 이전 추천 가수명으로 인해 모든 아티스트가 제외된 경우, 장르 기반 검색 추가
+    if (artists.length === 0 && previousArtists.size > 0) {
+      console.log('[RecommendationService] 모든 대기열 가수가 이전 추천 가수명과 일치하여 장르 기반 검색 쿼리 추가');
+      if (musicRegion === 'domestic') {
+        queries.push('korean ballad 발라드');
+        queries.push('korean ballad songs');
+        queries.push('k-pop ballad 발라드');
+        queries.push('한국 발라드');
+        queries.push('국내 발라드');
+      } else if (musicRegion === 'international') {
+        queries.push('ballad songs');
+        queries.push('popular ballad');
+        queries.push('best ballad');
+        queries.push('ballad music');
+        queries.push('ballad hits');
+      } else {
+        queries.push('ballad 발라드');
+        queries.push('ballad songs');
+        queries.push('popular ballad');
+        queries.push('best ballad');
+        queries.push('korean ballad');
+        queries.push('ballad music');
+      }
+    }
+    
+    if (artists.length > 0) {
+      // 우선순위 1: 아티스트 + "songs" 또는 "music" (다른 노래 찾기)
+      for (const artist of artists.slice(0, 3)) {
+        let songsQuery = `${artist} songs`;
+        if (musicRegion === 'domestic') {
+          songsQuery += ' korean k-pop';
+        } else if (musicRegion === 'international') {
+          songsQuery += ' -korean -k-pop';
+        }
+        queries.push(songsQuery);
+        
+        let musicQuery = `${artist} music`;
+        if (musicRegion === 'domestic') {
+          musicQuery += ' korean k-pop';
+        } else if (musicRegion === 'international') {
+          musicQuery += ' -korean -k-pop';
+        }
+        queries.push(musicQuery);
+      }
+      
+      // 우선순위 2: 아티스트 + "best songs" 또는 "popular songs" (인기 다른 노래)
+      for (const artist of artists.slice(0, 2)) {
+        let bestSongsQuery = `${artist} best songs`;
+        if (musicRegion === 'domestic') {
+          bestSongsQuery += ' korean k-pop';
+        } else if (musicRegion === 'international') {
+          bestSongsQuery += ' -korean -k-pop';
+        }
+        queries.push(bestSongsQuery);
+      }
+      
+      // 우선순위 3: 아티스트 이름만으로 검색 (다양한 노래 찾기)
+      for (const artist of artists.slice(0, 3)) {
+        let individualQuery = artist;
+        if (musicRegion === 'domestic') {
+          individualQuery += ' korean k-pop';
+        } else if (musicRegion === 'international') {
+          individualQuery += ' -korean -k-pop';
+        }
+        queries.push(individualQuery);
+      }
+      
+      // 우선순위 4: 아티스트 + "studio version" 또는 "official audio" (음질 좋은 버전, 다른 노래)
+      for (const artist of artists.slice(0, 2)) {
+        let studioQuery = `${artist} studio version`;
+        if (musicRegion === 'domestic') {
+          studioQuery += ' korean k-pop';
+        } else if (musicRegion === 'international') {
+          studioQuery += ' -korean -k-pop';
+        }
+        queries.push(studioQuery);
+      }
+    }
+
+    // 2. 제목 기반 검색 (보조)
+    let titleQuery = topSongs
       .slice(0, 3)
       .map(song => song.title)
       .join(' OR ');
-    queries.push(titleQuery);
-
-    // 2. 아티스트 기반 검색 (다양한 아티스트)
-    const artists = topSongs
-      .map(song => this.extractArtist(song.title))
-      .filter(Boolean)
-      .filter((artist, index, self) => self.indexOf(artist) === index) // 중복 제거
-      .slice(0, 3);
     
-    if (artists.length > 0) {
-      // 아티스트 이름만으로 검색
-      queries.push(artists.join(' OR '));
-      
-      // 아티스트 + "similar" 검색
-      queries.push(`${artists[0]} similar music`);
+    // 지역 필터 적용
+    if (musicRegion === 'domestic') {
+      titleQuery += ' korean k-pop';
+    } else if (musicRegion === 'international') {
+      // 해외 음악은 한글 제목이 아닌 것 위주로 검색
+      // 검색 쿼리 자체는 그대로 두고, 결과 필터링으로 처리
     }
+    
+    queries.push(titleQuery);
 
     // 3. 제목 키워드 추출 (특수문자 제거, 공통 단어 제외)
     const commonWords = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by']);
@@ -289,29 +660,44 @@ class RecommendationService {
     return title
       .toLowerCase()
       .trim()
+      .replace(/\s*\[.*?\]\s*/g, '') // 대괄호 내용 제거 (예: [가사/Lyrics], [EMOTION])
+      .replace(/\s*\(.*?\)\s*/g, '') // 괄호 내용 제거 (예: (Color Coded Lyrics), (Feat. 양다일))
+      .replace(/\s*\/\s*/g, ' ') // 슬래시를 공백으로
       .replace(/\s+/g, ' ') // 여러 공백을 하나로
       .replace(/[^\w\s가-힣]/g, '') // 특수문자 제거 (한글, 영문, 숫자만 유지)
+      .replace(/\s*(official|audio|video|mv|music|song|track|version|ver|studio|live|remix|cover|feat|ft|featuring|lyrics|lyric|가사|color|coded|eng|rom|han|emotion|audio|lyrics)\s*/gi, '') // 공통 키워드 제거 (더 많은 키워드 추가)
+      .replace(/\s+/g, ' ') // 다시 공백 정리
       .trim();
   }
 
   /**
-   * 제목 문자열 유사도 계산 (간단한 방법)
+   * 제목 문자열 유사도 계산 (가수명 제외하고 노래 제목만 비교)
    * @param {string} title1 - 첫 번째 제목
    * @param {string} title2 - 두 번째 제목
    * @returns {number} 유사도 (0~1)
    */
   calculateTitleSimilarity(title1, title2) {
-    const normalized1 = this.normalizeTitle(title1);
-    const normalized2 = this.normalizeTitle(title2);
+    // 가수명을 제외하고 노래 제목만 추출
+    const songTitle1 = this.extractSongTitle(title1);
+    const songTitle2 = this.extractSongTitle(title2);
+    
+    // 노래 제목 정규화
+    const normalized1 = this.normalizeTitle(songTitle1);
+    const normalized2 = this.normalizeTitle(songTitle2);
 
     if (normalized1 === normalized2) return 1.0;
     if (normalized1.length === 0 || normalized2.length === 0) return 0.0;
 
-    // 한 제목이 다른 제목을 포함하는지 확인
+    // 한 제목이 다른 제목을 포함하는지 확인 (더 엄격하게)
     if (normalized1.includes(normalized2) || normalized2.includes(normalized1)) {
       const shorter = normalized1.length < normalized2.length ? normalized1 : normalized2;
       const longer = normalized1.length >= normalized2.length ? normalized1 : normalized2;
-      return shorter.length / longer.length; // 포함 비율
+      const ratio = shorter.length / longer.length;
+      // 포함 비율이 80% 이상이면 높은 유사도로 간주
+      if (ratio >= 0.8) {
+        return 0.9; // 높은 유사도
+      }
+      return ratio;
     }
 
     // 공통 부분 계산 (간단한 방법)
@@ -409,75 +795,814 @@ class RecommendationService {
   }
 
   /**
-   * 중복 제거 (대기열에 이미 있는 음악 및 유사한 제목 제외)
+   * 재생 가능한 음악인지 검증
+   * @param {Object} music - 음악 객체
+   * @returns {boolean} 재생 가능하면 true, 아니면 false
+   */
+  isPlayableMusic(music) {
+    if (!music) return false;
+    
+    // 필수 필드 확인
+    if (!music.videoId || !music.title) {
+      console.log(`[RecommendationService] 필수 필드 누락: videoId=${!!music.videoId}, title=${!!music.title}`);
+      return false;
+    }
+    
+    // videoId가 유효한 형식인지 확인 (11자리 문자열)
+    if (typeof music.videoId !== 'string' || music.videoId.length !== 11) {
+      console.log(`[RecommendationService] 유효하지 않은 videoId: "${music.videoId}"`);
+      return false;
+    }
+    
+    // thumbnail이 있는지 확인
+    if (!music.thumbnail || !music.thumbnail.startsWith('http')) {
+      console.log(`[RecommendationService] 유효하지 않은 thumbnail: "${music.title}"`);
+      return false;
+    }
+    
+    return true;
+  }
+
+  /**
+   * 쇼츠인지 확인
+   * @param {Object} music - 음악 객체
+   * @returns {boolean} 쇼츠이면 true, 아니면 false
+   */
+  isShorts(music) {
+    if (!music || !music.title) return false;
+    
+    const title = music.title.toLowerCase();
+    
+    // 제목에 쇼츠 키워드가 있는지 확인
+    const shortsKeywords = ['#shorts', 'shorts', '쇼츠', 'short'];
+    const hasShortsKeyword = shortsKeywords.some(keyword => title.includes(keyword));
+    
+    if (hasShortsKeyword) {
+      console.log(`[RecommendationService] 쇼츠 제외 (키워드): "${music.title}"`);
+      return true;
+    }
+    
+    // 재생 시간이 1분 이하인지 확인 (쇼츠는 보통 1분 이하)
+    if (music.duration) {
+      const durationStr = music.duration;
+      const parts = durationStr.split(':');
+      if (parts.length >= 2) {
+        let totalSeconds = 0;
+        if (parts.length === 3) {
+          // HH:MM:SS 형식
+          totalSeconds = parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60 + parseInt(parts[2], 10);
+        } else if (parts.length === 2) {
+          // MM:SS 형식
+          totalSeconds = parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+        }
+        const minutes = totalSeconds / 60;
+        
+        // 1분 이하이면서 제목에 short 관련 키워드가 있으면 쇼츠로 간주
+        if (minutes <= 1 && (title.includes('short') || title.includes('쇼츠'))) {
+          console.log(`[RecommendationService] 쇼츠 제외 (재생시간 + 키워드): "${music.title}" (${durationStr})`);
+          return true;
+        }
+      }
+    }
+    
+    return false;
+  }
+
+  /**
+   * 단일 곡인지 검증 (라이브, 커버, 리믹스, 뮤직비디오 등 제외)
+   * @param {Object} music - 음악 객체
+   * @returns {boolean} 유효한 단일 곡이면 true, 아니면 false
+   */
+  isValidSingleTrack(music) {
+    if (!music || !music.title) return false;
+
+    // 쇼츠 제외
+    if (this.isShorts(music)) {
+      return false;
+    }
+
+    const title = music.title.toLowerCase();
+    
+    // 제외할 키워드 패턴 (라이브, 커버, 리믹스, 뮤직비디오, 공연장, 대회 등)
+    const excludeKeywords = [
+      // 라이브/공연 관련 (강화)
+      'live', 'concert', 'performance', 'stage', 'show', 'tour',
+      '라이브', '공연', '무대', '콘서트', '퍼포먼스',
+      // 공연장/대회 관련 (추가)
+      'venue', 'arena', 'stadium', 'hall', 'theater', 'theatre',
+      '공연장', '경기장', '체육관', '홀', '극장',
+      'competition', 'contest', 'competition', 'audition', 'talent show',
+      '대회', '경연', '오디션', '선발', '경기',
+      'festival', 'fest', 'music festival', 'rock festival',
+      '페스티벌', '축제', '음악제',
+      'award', 'ceremony', 'grammy', 'billboard',
+      '시상식', '수상', '그래미', '빌보드',
+      'broadcast', 'tv', 'television', 'kbs', 'mbc', 'sbs',
+      '방송', '텔레비전', '티비',
+      'fan cam', 'fancam', 'phone recording', 'phone cam',
+      '팬캠', '팬 캠', '핸드폰 녹음', '핸드폰 영상',
+      'audience', 'crowd', 'crowd recording',
+      '관중', '청중', '관객', '군중',
+      // 커버/리믹스 관련
+      'cover', 'remix', 'mashup', 'mash-up', 'edit', 'version',
+      '커버', '리믹스', '리메이크', '어레인지',
+      // 뮤직비디오/비디오 관련
+      'mv', 'music video', 'official video', 'video', 'visual',
+      '뮤직비디오', '뮤비', '비디오', '영상',
+      // 기타 제외 키워드
+      'reaction', 'review', 'reaction video', 'reaction video',
+      '리액션', '반응', '리뷰',
+      'behind', 'making', 'making of', 'behind the scenes',
+      '메이킹', '비하인드',
+      'interview', '인터뷰',
+      'teaser', 'trailer', '티저', '트레일러',
+      'preview', 'snippet', '프리뷰', '스니펫',
+      'extended', 'extended version', 'extended mix',
+      'acoustic', 'unplugged', 'acoustic version',
+      '어쿠스틱', '언플러그드',
+      'karaoke', 'instrumental', 'karaoke version',
+      '카라오케', '반주', 'MR',
+      'dance', 'choreography', 'dance practice',
+      '댄스', '안무', '댄스 연습',
+      'rehearsal', '리허설',
+      'parody', '패러디',
+      'tutorial', '튜토리얼',
+      'lesson', '레슨',
+      'explained', '설명',
+      'analysis', '분석',
+      'breakdown', '브레이크다운',
+      'comparison', '비교',
+      'vs', 'versus',
+      'medley', '메들리',
+      'mashup', '매시업',
+      'mash up', '매시 업',
+      'mix', '믹스',
+      'dj', '디제이',
+      'set', '세트',
+      'session', '세션',
+      'episode', '에피소드',
+      'part', '파트',
+      'chapter', '챕터',
+      'series', '시리즈',
+      'season', '시즌',
+      'ep', 'EP',
+      'hits collection', '히츠 컬렉션',
+      'best collection', '베스트 컬렉션',
+      'greatest collection', '그레이트스트 컬렉션',
+      'hits mix', '히츠 믹스',
+      'best mix', '베스트 믹스',
+      'greatest mix', '그레이트스트 믹스',
+      'hits playlist', '히츠 플레이리스트',
+      'best playlist', '베스트 플레이리스트',
+      'greatest playlist', '그레이트스트 플레이리스트',
+      'hits nonstop', '히츠 논스톱',
+      'best nonstop', '베스트 논스톱',
+      'greatest nonstop', '그레이트스트 논스톱',
+      'hits continuous', '히츠 연속',
+      'best continuous', '베스트 연속',
+      'greatest continuous', '그레이트스트 연속',
+      'hits full', '히츠 풀',
+      'best full', '베스트 풀',
+      'greatest full', '그레이트스트 풀',
+      'hits complete', '히츠 완전판',
+      'best complete', '베스트 완전판',
+      'greatest complete', '그레이트스트 완전판',
+      'hits all', '히츠 올',
+      'best all', '베스트 올',
+      'greatest all', '그레이트스트 올',
+      'hits anthology', '히츠 앤솔로지',
+      'best anthology', '베스트 앤솔로지',
+      'greatest anthology', '그레이트스트 앤솔로지',
+      'hits the best', '히츠 더 베스트',
+      'best the best', '베스트 더 베스트',
+      'greatest the best', '그레이트스트 더 베스트',
+      'hits top', '히츠 탑',
+      'best top', '베스트 탑',
+      'greatest top', '그레이트스트 탑',
+      'hits chart', '히츠 차트',
+      'best chart', '베스트 차트',
+      'greatest chart', '그레이트스트 차트',
+      'hits ranking', '히츠 랭킹',
+      'best ranking', '베스트 랭킹',
+      'greatest ranking', '그레이트스트 랭킹',
+      'hits countdown', '히츠 카운트다운',
+      'best countdown', '베스트 카운트다운',
+      'greatest countdown', '그레이트스트 카운트다운',
+      'hits top 10', '히츠 탑 10',
+      'best top 10', '베스트 탑 10',
+      'greatest top 10', '그레이트스트 탑 10',
+      'hits top 20', '히츠 탑 20',
+      'best top 20', '베스트 탑 20',
+      'greatest top 20', '그레이트스트 탑 20',
+      'hits top 50', '히츠 탑 50',
+      'best top 50', '베스트 탑 50',
+      'greatest top 50', '그레이트스트 탑 50',
+      'hits top 100', '히츠 탑 100',
+      'best top 100', '베스트 탑 100',
+      'greatest top 100', '그레이트스트 탑 100',
+      'hits playlist', '히츠 플레이리스트',
+      'best playlist', '베스트 플레이리스트',
+      'greatest playlist', '그레이트스트 플레이리스트',
+      'hits mix', '히츠 믹스',
+      'best mix', '베스트 믹스',
+      'greatest mix', '그레이트스트 믹스',
+      'hits nonstop', '히츠 논스톱',
+      'best nonstop', '베스트 논스톱',
+      'greatest nonstop', '그레이트스트 논스톱',
+      'hits continuous', '히츠 연속',
+      'best continuous', '베스트 연속',
+      'greatest continuous', '그레이트스트 연속',
+      'hits full', '히츠 풀',
+      'best full', '베스트 풀',
+      'greatest full', '그레이트스트 풀',
+      'hits complete', '히츠 완전판',
+      'best complete', '베스트 완전판',
+      'greatest complete', '그레이트스트 완전판',
+      'hits all', '히츠 올',
+      'best all', '베스트 올',
+      'greatest all', '그레이트스트 올',
+      'hits anthology', '히츠 앤솔로지',
+      'best anthology', '베스트 앤솔로지',
+      'greatest anthology', '그레이트스트 앤솔로지',
+      'hits the best', '히츠 더 베스트',
+      'best the best', '베스트 더 베스트',
+      'greatest the best', '그레이트스트 더 베스트',
+      'hits top', '히츠 탑',
+      'best top', '베스트 탑',
+      'greatest top', '그레이트스트 탑',
+      'hits chart', '히츠 차트',
+      'best chart', '베스트 차트',
+      'greatest chart', '그레이트스트 차트',
+      'hits ranking', '히츠 랭킹',
+      'best ranking', '베스트 랭킹',
+      'greatest ranking', '그레이트스트 랭킹',
+      'hits countdown', '히츠 카운트다운',
+      'best countdown', '베스트 카운트다운',
+      'greatest countdown', '그레이트스트 카운트다운',
+      'hits top 10', '히츠 탑 10',
+      'best top 10', '베스트 탑 10',
+      'greatest top 10', '그레이트스트 탑 10',
+      'hits top 20', '히츠 탑 20',
+      'best top 20', '베스트 탑 20',
+      'greatest top 20', '그레이트스트 탑 20',
+      'hits top 50', '히츠 탑 50',
+      'best top 50', '베스트 탑 50',
+      'greatest top 50', '그레이트스트 탑 50',
+      'hits top 100', '히츠 탑 100',
+      'best top 100', '베스트 탑 100',
+      'greatest top 100', '그레이트스트 탑 100',
+    ];
+
+    // 제외 키워드가 포함되어 있으면 제외
+    for (const keyword of excludeKeywords) {
+      if (title.includes(keyword)) {
+        console.log(`[RecommendationService] 단일 곡이 아님 (제외 키워드): "${music.title}" (키워드: ${keyword})`);
+        return false;
+      }
+    }
+
+    // 재생 시간 검증 (1분 미만 또는 8분 이상이면 제외)
+    if (music.duration) {
+      const durationStr = music.duration;
+      const parts = durationStr.split(':');
+      if (parts.length >= 2) {
+        let totalSeconds = 0;
+        if (parts.length === 3) {
+          // HH:MM:SS 형식
+          totalSeconds = parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60 + parseInt(parts[2], 10);
+        } else if (parts.length === 2) {
+          // MM:SS 형식
+          totalSeconds = parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+        }
+        const minutes = totalSeconds / 60;
+        
+        // 1분 미만이면 너무 짧음 (인트로, 티저 등)
+        if (minutes < 1) {
+          console.log(`[RecommendationService] 재생시간이 너무 짧음: "${music.title}" (${durationStr})`);
+          return false;
+        }
+        
+        // 8분 이상이면 너무 김 (모음집, 라이브 세트 등)
+        if (minutes >= 8) {
+          console.log(`[RecommendationService] 재생시간이 너무 김: "${music.title}" (${durationStr})`);
+          return false;
+        }
+      }
+    }
+
+    // 제목이 너무 짧으면 제외 (3자 미만)
+    if (music.title.trim().length < 3) {
+      console.log(`[RecommendationService] 제목이 너무 짧음: "${music.title}"`);
+      return false;
+    }
+
+    // 제목이 너무 길면 제외 (100자 초과)
+    if (music.title.trim().length > 100) {
+      console.log(`[RecommendationService] 제목이 너무 김: "${music.title}"`);
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * 이전 추천 기록 가져오기 (localStorage에서)
+   * @returns {Array} 이전 추천 기록 [{ videoId, title, timestamp }]
+   */
+  getPreviousRecommendations() {
+    try {
+      const stored = localStorage.getItem('aiRecommendations');
+      if (stored) {
+        const recommendations = JSON.parse(stored);
+        // 최근 100개만 유지 (메모리 절약)
+        return recommendations.slice(-100).map(rec => ({
+          videoId: rec.videoId,
+          title: rec.title,
+          timestamp: rec.timestamp || Date.now()
+        }));
+      }
+    } catch (error) {
+      console.warn('[RecommendationService] 이전 추천 기록 로드 실패:', error);
+    }
+    return [];
+  }
+
+  /**
+   * 중복 제거 (제한된 이전 추천 기록 사용 - 폴백용)
    * @param {Array} recommendations - 추천 결과
    * @param {Array} queue - 현재 대기열
-   * @param {number} titleSimilarityThreshold - 제목 유사도 임계값 (기본 0.85)
+   * @param {number} titleSimilarityThreshold - 제목 유사도 임계값
+   * @param {Array} limitedPreviousRecommendations - 제한된 이전 추천 기록
    * @returns {Promise<Array>} 중복 제거된 추천 결과
    */
-  async filterDuplicates(recommendations, queue, titleSimilarityThreshold = 0.85) {
+  async filterDuplicatesWithLimitedHistory(recommendations, queue, titleSimilarityThreshold = 0.80, limitedPreviousRecommendations = []) {
     if (!recommendations || recommendations.length === 0) {
       return [];
     }
 
+    console.log(`[RecommendationService] 제한된 이전 추천 기록으로 중복 제거: ${limitedPreviousRecommendations.length}개`);
+
     const queueVideoIds = new Set(queue.map(music => music.videoId));
     const queueTitles = queue.map(music => music.title);
     
-    // 대기열 제목들의 임베딩 생성 (한 번만, 배치 처리)
-    const queueTitleEmbeddings = await embeddingService.generateEmbeddings(queueTitles);
-
-    // 추천 결과 제목들의 임베딩 생성 (배치 처리로 성능 최적화)
+    // 제한된 이전 추천 기록만 사용
+    const previousVideoIds = new Set(limitedPreviousRecommendations.map(rec => rec.videoId));
+    const previousTitles = limitedPreviousRecommendations.map(rec => rec.title);
+    
+    // 모든 제목 통합 (대기열 + 제한된 이전 추천)
+    const allTitles = [...queueTitles, ...previousTitles];
+    
+    // 추천 결과 제목들의 임베딩 생성
     const recTitles = recommendations.map(rec => rec.title);
     const recEmbeddings = await embeddingService.generateEmbeddings(recTitles);
 
     const filtered = [];
+    const seenVideoIds = new Set();
 
     for (let i = 0; i < recommendations.length; i++) {
       const rec = recommendations[i];
       const recEmbedding = recEmbeddings[i];
 
-      // 1. videoId 중복 확인
-      if (queueVideoIds.has(rec.videoId)) {
-        continue; // videoId가 같으면 제외
+      // videoId 중복 확인 (대기열 + 제한된 이전 추천만)
+      if (queueVideoIds.has(rec.videoId) || previousVideoIds.has(rec.videoId) || seenVideoIds.has(rec.videoId)) {
+        continue;
       }
 
-      // 2. 제목 유사도 확인
-      let isDuplicate = false;
+      // 가수명 추출 및 유사도 확인 (완화된 버전)
+      const recArtist = this.extractArtist(rec.title);
+      const recSongTitle = this.extractSongTitle(rec.title);
       
-      // 빠른 문자열 기반 유사도 확인 (먼저 체크)
-      for (const queueTitle of queueTitles) {
-        const stringSimilarity = this.calculateTitleSimilarity(rec.title, queueTitle);
-        if (stringSimilarity >= 0.90) {
-          // 문자열 유사도가 매우 높으면 (90% 이상) 제외 (95% → 90%로 강화)
+      let hasSimilarArtist = false;
+      if (recArtist && queue.length > 0) {
+        for (const queueMusic of queue) {
+          const queueArtist = this.extractArtist(queueMusic.title);
+          if (queueArtist) {
+            const artistMatch = this.calculateArtistMatch(recArtist, queueArtist);
+            if (artistMatch >= 0.8) {
+              hasSimilarArtist = true;
+              break;
+            }
+          }
+        }
+      } else {
+        // 가수명 추출 실패하거나 대기열이 비어있으면 통과
+        hasSimilarArtist = true;
+      }
+      
+      if (!hasSimilarArtist && queue.length > 0 && recArtist) {
+        continue;
+      }
+
+      // 제목 중복 확인 (완화된 임계값 사용: 0.85)
+      let isDuplicate = false;
+      for (let j = 0; j < allTitles.length; j++) {
+        const queueSongTitle = this.extractSongTitle(allTitles[j]);
+        const recNormalizedSongTitle = this.normalizeTitle(recSongTitle);
+        const queueNormalizedSongTitle = this.normalizeTitle(queueSongTitle);
+        
+        if (recNormalizedSongTitle === queueNormalizedSongTitle && recNormalizedSongTitle.length > 0) {
           isDuplicate = true;
-          console.log(`[RecommendationService] 유사한 제목 제외 (문자열): "${rec.title}" vs "${queueTitle}" (유사도: ${(stringSimilarity * 100).toFixed(1)}%)`);
+          break;
+        }
+        
+        // 제목 유사도 확인 (임계값 완화: 0.85)
+        const stringSimilarity = this.calculateTitleSimilarity(rec.title, allTitles[j]);
+        if (stringSimilarity >= 0.85) {
+          isDuplicate = true;
           break;
         }
       }
 
-      // 3. 문자열 유사도가 높지 않으면 임베딩 기반 유사도 확인
       if (!isDuplicate) {
-        for (let j = 0; j < queueTitleEmbeddings.length; j++) {
-          const similarity = SimilarityCalculator.cosineSimilarity(
-            recEmbedding,
-            queueTitleEmbeddings[j]
-          );
+        filtered.push(rec);
+        seenVideoIds.add(rec.videoId);
+      }
+    }
+
+    console.log(`[RecommendationService] 제한된 이전 추천 기록으로 중복 제거: ${recommendations.length}개 → ${filtered.length}개`);
+    return filtered;
+  }
+
+  /**
+   * 중복 제거 (대기열 + 이전 추천 기록에 이미 있는 음악 및 유사한 제목 제외)
+   * @param {Array} recommendations - 추천 결과
+   * @param {Array} queue - 현재 대기열
+   * @param {number} titleSimilarityThreshold - 제목 유사도 임계값 (기본 0.80)
+   * @returns {Promise<Array>} 중복 제거된 추천 결과
+   */
+  async filterDuplicates(recommendations, queue, titleSimilarityThreshold = 0.80) {
+    if (!recommendations || recommendations.length === 0) {
+      return [];
+    }
+
+    // 이전 추천 기록 가져오기
+    const previousRecommendations = this.getPreviousRecommendations();
+    console.log(`[RecommendationService] 이전 추천 기록: ${previousRecommendations.length}개`);
+
+    // 대기열에 현재 재생 중인 음악도 포함되어 있음 (서버에서 extendedQueue로 전송)
+    // queue의 첫 번째 항목이 현재 재생 중인 음악일 가능성이 높음
+    const queueVideoIds = new Set(queue.map(music => music.videoId));
+    const queueTitles = queue.map(music => music.title);
+    const queueNormalizedTitles = queueTitles.map(title => this.normalizeTitle(title));
+    
+    // 디버깅: 대기열 정보 로그 (현재 재생 중인 음악 포함)
+    console.log(`[RecommendationService] 중복 체크 대상: 대기열 ${queue.length}개 (현재 재생 중인 음악 포함), 이전 추천 ${previousRecommendations.length}개`);
+    if (queue.length > 0) {
+      console.log(`[RecommendationService] 대기열 첫 번째 항목 (현재 재생 중일 가능성): "${queue[0].title}" (videoId: ${queue[0].videoId})`);
+    }
+    
+    // 이전 추천 기록의 videoId와 제목도 포함
+    const previousVideoIds = new Set(previousRecommendations.map(rec => rec.videoId));
+    const previousTitles = previousRecommendations.map(rec => rec.title);
+    const previousNormalizedTitles = previousTitles.map(title => this.normalizeTitle(title));
+    
+    // 이전 추천 기록의 가수명 추출 (새로고침 후 다른 가수 추천을 위해)
+    const previousArtists = new Set();
+    const previousArtistsOriginal = new Set(); // 원본 가수명도 저장 (디버깅용)
+    previousRecommendations.forEach(rec => {
+      const artist = this.extractArtist(rec.title);
+      if (artist) {
+        // 정규화된 가수명 사용 (괄호, 대괄호, 공백 제거)
+        const normalizedArtist = this.normalizeArtistName(artist);
+        if (normalizedArtist) {
+          previousArtists.add(normalizedArtist);
+          previousArtistsOriginal.add(artist); // 원본도 저장
+          console.log(`[RecommendationService] 이전 추천 가수명 추출: "${rec.title}" → "${artist}" (정규화: "${normalizedArtist}")`);
+        } else {
+          console.warn(`[RecommendationService] 이전 추천 가수명 정규화 실패: "${rec.title}" → "${artist}"`);
+        }
+      } else {
+        console.warn(`[RecommendationService] 이전 추천 가수명 추출 실패: "${rec.title}"`);
+      }
+    });
+    console.log(`[RecommendationService] 이전 추천 기록의 가수명 (정규화): ${previousArtists.size}개`, Array.from(previousArtists));
+    console.log(`[RecommendationService] 이전 추천 기록의 가수명 (원본):`, Array.from(previousArtistsOriginal));
+    
+    // 모든 제목 통합 (대기열 + 이전 추천)
+    const allTitles = [...queueTitles, ...previousTitles];
+    const allNormalizedTitles = [...queueNormalizedTitles, ...previousNormalizedTitles];
+    
+    // 대기열 제목들의 임베딩 생성 (한 번만, 배치 처리)
+    // 빈 배열이면 임베딩 생성하지 않음
+    let queueTitleEmbeddings = [];
+    if (queueTitles.length > 0) {
+      try {
+        queueTitleEmbeddings = await embeddingService.generateEmbeddings(queueTitles);
+      } catch (error) {
+        console.warn('[RecommendationService] 대기열 제목 임베딩 생성 실패:', error);
+        queueTitleEmbeddings = [];
+      }
+    }
+    
+    // 이전 추천 기록 제목들의 임베딩 생성
+    let previousTitleEmbeddings = [];
+    if (previousTitles.length > 0) {
+      try {
+        previousTitleEmbeddings = await embeddingService.generateEmbeddings(previousTitles);
+      } catch (error) {
+        console.warn('[RecommendationService] 이전 추천 제목 임베딩 생성 실패:', error);
+        previousTitleEmbeddings = [];
+      }
+    }
+    
+    // 모든 임베딩 통합
+    const allTitleEmbeddings = [...queueTitleEmbeddings, ...previousTitleEmbeddings];
+
+    // 추천 결과 제목들의 임베딩 생성 (배치 처리로 성능 최적화)
+    const recTitles = recommendations.map(rec => rec.title);
+    let recEmbeddings = [];
+    if (recTitles.length > 0) {
+      try {
+        recEmbeddings = await embeddingService.generateEmbeddings(recTitles);
+      } catch (error) {
+        console.error('[RecommendationService] 추천 결과 제목 임베딩 생성 실패:', error);
+        // 임베딩 생성 실패 시 빈 배열로 처리 (임베딩 기반 중복 체크는 건너뜀)
+        recEmbeddings = [];
+      }
+    }
+
+    const filtered = [];
+    const seenVideoIds = new Set(); // 추천 결과 내에서도 중복 제거
+    const seenNormalizedTitles = new Set(); // 추천 결과 내에서도 정규화된 제목 중복 제거
+    const seenEmbeddings = []; // 추천 결과 내에서도 임베딩 중복 제거
+
+    for (let i = 0; i < recommendations.length; i++) {
+      const rec = recommendations[i];
+      const recEmbedding = recEmbeddings[i];
+      const recNormalizedTitle = this.normalizeTitle(rec.title);
+
+      // 1. videoId 중복 확인 (대기열 + 현재 재생 중인 음악 포함)
+      if (queueVideoIds.has(rec.videoId)) {
+        const isCurrentPlaying = queue.length > 0 && queue[0].videoId === rec.videoId;
+        const source = isCurrentPlaying ? '현재 재생 중인 음악' : '대기열';
+        console.log(`[RecommendationService] 동일 videoId 제외 (${source}): "${rec.title}" (${rec.videoId})`);
+        continue;
+      }
+
+      // 1-1. videoId 중복 확인 (이전 추천 기록)
+      if (previousVideoIds.has(rec.videoId)) {
+        console.log(`[RecommendationService] 동일 videoId 제외 (이전 추천): "${rec.title}" (${rec.videoId})`);
+        continue;
+      }
+
+      // 1-2. 추천 결과 내에서도 videoId 중복 제거
+      if (seenVideoIds.has(rec.videoId)) {
+        console.log(`[RecommendationService] 추천 결과 내 중복 videoId 제외: "${rec.title}" (${rec.videoId})`);
+        continue;
+      }
+
+      // 1-3. 추천 결과 내에서도 정규화된 제목 중복 제거
+      if (seenNormalizedTitles.has(recNormalizedTitle)) {
+        console.log(`[RecommendationService] 추천 결과 내 중복 제목 제외 (정규화): "${rec.title}"`);
+        continue;
+      }
+
+      // 1-4. 추천 결과 내에서도 제목 유사도 확인 (문자열 기반)
+      let isDuplicateInResults = false;
+      for (const filteredTitle of filtered.map(f => f.title)) {
+        const stringSimilarity = this.calculateTitleSimilarity(rec.title, filteredTitle);
+        if (stringSimilarity >= 0.70) {
+          // 추천 결과 내에서도 문자열 유사도가 높으면 제외 (75% → 70%로 더 강화)
+          isDuplicateInResults = true;
+          console.log(`[RecommendationService] 추천 결과 내 유사한 제목 제외 (문자열): "${rec.title}" vs "${filteredTitle}" (유사도: ${(stringSimilarity * 100).toFixed(1)}%)`);
+          break;
+        }
+      }
+      
+      // 1-5. 추천 결과 내에서도 임베딩 유사도 확인 (임베딩이 있는 경우만)
+      if (!isDuplicateInResults && recEmbedding) {
+        for (let k = 0; k < seenEmbeddings.length; k++) {
+          if (seenEmbeddings[k]) {
+            const similarity = SimilarityCalculator.cosineSimilarity(recEmbedding, seenEmbeddings[k]);
+            if (similarity >= 0.70) {
+              // 추천 결과 내에서도 유사도가 높으면 제외 (0.75 → 0.70로 더 강화)
+              isDuplicateInResults = true;
+              console.log(`[RecommendationService] 추천 결과 내 유사한 제목 제외 (임베딩): "${rec.title}" (유사도: ${(similarity * 100).toFixed(1)}%)`);
+              break;
+            }
+          }
+        }
+      }
+      
+      if (isDuplicateInResults) {
+        continue;
+      }
+
+      // 2. 가수명 추출 및 유사도 확인
+      const recArtist = this.extractArtist(rec.title);
+      const recSongTitle = this.extractSongTitle(rec.title);
+      const recNormalizedSongTitle = this.normalizeTitle(recSongTitle);
+      
+      // 2-0. 이전 추천 기록의 가수명과 비교 (새로고침 후 다른 가수 추천을 위해)
+      // 대기열이 비어있을 때는 이전 추천 가수명 제외가 더 중요함
+      if (recArtist && previousArtists.size > 0) {
+        // 정규화된 가수명 사용 (괄호, 대괄호, 공백 제거)
+        const recArtistNormalized = this.normalizeArtistName(recArtist);
+        
+        if (!recArtistNormalized) {
+          console.warn(`[RecommendationService] 가수명 정규화 실패: "${rec.title}" → "${recArtist}"`);
+        } else {
+          console.log(`[RecommendationService] [가수명 체크] "${rec.title}" → 가수: "${recArtist}" → 정규화: "${recArtistNormalized}"`);
+          console.log(`[RecommendationService] [가수명 체크] 이전 추천 가수명 목록:`, Array.from(previousArtists));
           
-          if (similarity >= titleSimilarityThreshold) {
-            // 임베딩 유사도가 임계값 이상이면 제외
+          // 이전 추천 기록의 가수명과 정확히 일치하는지 확인 (정규화된 버전으로)
+          if (previousArtists.has(recArtistNormalized)) {
+            console.log(`[RecommendationService] ❌ [이전 추천 가수명 제외] 정규화 후 일치: "${rec.title}" (가수: "${recArtist}" → "${recArtistNormalized}")`);
+            continue;
+          }
+          
+          // 이전 추천 기록의 가수명과 유사한지 확인 (정규화된 버전으로 비교)
+          let isSimilarToPreviousArtist = false;
+          let matchedPreviousArtist = null;
+          let matchReason = '';
+          
+          for (const previousArtistNormalized of previousArtists) {
+            // 정규화된 가수명끼리 비교
+            if (recArtistNormalized === previousArtistNormalized) {
+              isSimilarToPreviousArtist = true;
+              matchedPreviousArtist = previousArtistNormalized;
+              matchReason = '정규화 후 완전 일치';
+              break;
+            }
+            
+            // 한 가수명이 다른 가수명을 포함하는지 확인
+            if (recArtistNormalized.includes(previousArtistNormalized) || previousArtistNormalized.includes(recArtistNormalized)) {
+              const shorter = recArtistNormalized.length < previousArtistNormalized.length ? recArtistNormalized : previousArtistNormalized;
+              const longer = recArtistNormalized.length >= previousArtistNormalized.length ? recArtistNormalized : previousArtistNormalized;
+              const ratio = shorter.length / longer.length;
+              if (ratio >= 0.5) { // 50% 이상 포함되면 유사한 가수로 간주
+                isSimilarToPreviousArtist = true;
+                matchedPreviousArtist = previousArtistNormalized;
+                matchReason = `포함 관계 (${(ratio * 100).toFixed(1)}%)`;
+                console.log(`[RecommendationService] ❌ [이전 추천 가수명 제외] 포함 관계: "${rec.title}" (가수: "${recArtist}" → "${recArtistNormalized}") vs "${previousArtistNormalized}" (포함 비율: ${(ratio * 100).toFixed(1)}%)`);
+                break;
+              }
+            }
+            
+            // 유사도 체크 (원본 가수명으로)
+            const artistMatch = this.calculateArtistMatch(recArtist, previousArtistNormalized);
+            if (artistMatch >= 0.7) { // 유사도 임계값을 0.8에서 0.7로 낮춤
+              isSimilarToPreviousArtist = true;
+              matchedPreviousArtist = previousArtistNormalized;
+              matchReason = `유사도 높음 (${(artistMatch * 100).toFixed(1)}%)`;
+              console.log(`[RecommendationService] ❌ [이전 추천 가수명 제외] 유사도 높음: "${rec.title}" (가수: "${recArtist}" → "${recArtistNormalized}") vs "${previousArtistNormalized}" (유사도: ${(artistMatch * 100).toFixed(1)}%)`);
+              break;
+            }
+          }
+          
+          if (isSimilarToPreviousArtist) {
+            if (!matchReason) {
+              console.log(`[RecommendationService] ❌ [이전 추천 가수명 제외] "${rec.title}" (가수: "${recArtist}" → "${recArtistNormalized}") vs "${matchedPreviousArtist}"`);
+            }
+            continue;
+          } else {
+            console.log(`[RecommendationService] ✅ [이전 추천 가수명과 다름] "${rec.title}" (가수: "${recArtist}" → "${recArtistNormalized}") - 통과`);
+          }
+        }
+      } else if (!recArtist && previousArtists.size > 0) {
+        // 가수명 추출 실패한 경우에도 경고 로그
+        console.warn(`[RecommendationService] ⚠️ 가수명 추출 실패 (이전 추천 가수명 제외 체크 불가): "${rec.title}"`);
+      } else if (recArtist && previousArtists.size === 0) {
+        console.log(`[RecommendationService] ✅ [이전 추천 기록 없음] "${rec.title}" (가수: "${recArtist}") - 통과`);
+      }
+      
+      // 2-1. 가수명이 유사하거나 동일한지 확인 (대기열의 가수들과 비교)
+      let hasSimilarArtist = false;
+      if (recArtist) {
+        for (const queueMusic of queue) {
+          const queueArtist = this.extractArtist(queueMusic.title);
+          if (queueArtist) {
+            const artistMatch = this.calculateArtistMatch(recArtist, queueArtist);
+            if (artistMatch >= 0.8) { // 유사하거나 동일한 가수
+              hasSimilarArtist = true;
+              break;
+            }
+          }
+        }
+      }
+      
+      // 가수명이 유사하거나 동일하지 않으면 제외 (요구사항: 가수명은 유사하거나 동일해야 함)
+      // 단, 가수명 추출이 실패한 경우(recArtist가 null)는 제외하지 않음 (다양한 형식 지원)
+      if (!hasSimilarArtist && queue.length > 0 && recArtist) {
+        console.log(`[RecommendationService] 가수명이 유사하지 않아 제외: "${rec.title}" (가수: ${recArtist})`);
+        continue;
+      }
+      
+      // 가수명 추출 실패한 경우 경고만 출력하고 계속 진행
+      if (!recArtist && queue.length > 0) {
+        console.warn(`[RecommendationService] 가수명 추출 실패 (계속 진행): "${rec.title}"`);
+      }
+
+      // 3. 정확히 같은 제목 확인 (가수명 제외, 노래 제목만 비교) - 대기열 + 현재 재생 중인 음악 + 이전 추천 기록 모두 확인
+      let isDuplicate = false;
+      for (let j = 0; j < allTitles.length; j++) {
+        const queueSongTitle = this.extractSongTitle(allTitles[j]);
+        const queueNormalizedSongTitle = this.normalizeTitle(queueSongTitle);
+        
+        if (recNormalizedSongTitle === queueNormalizedSongTitle && recNormalizedSongTitle.length > 0) {
+          isDuplicate = true;
+          // j < queueTitles.length이면 대기열 또는 현재 재생 중인 음악
+          const isCurrentPlaying = j === 0 && queue.length > 0; // 첫 번째 항목이 현재 재생 중인 음악일 가능성
+          const source = j < queueTitles.length 
+            ? (isCurrentPlaying ? '현재 재생 중인 음악' : '대기열') 
+            : '이전 추천';
+          console.log(`[RecommendationService] 동일 제목 제외 (가수명 제외, ${source}): "${rec.title}" (제목: "${recSongTitle}") vs "${allTitles[j]}" (제목: "${queueSongTitle}")`);
+          break;
+        }
+      }
+
+      // 4. 제목 유사도 확인 (가수명 제외, 노래 제목만 비교) - 대기열 + 현재 재생 중인 음악 + 이전 추천 기록 모두 확인
+      if (!isDuplicate) {
+        for (let j = 0; j < allTitles.length; j++) {
+          const stringSimilarity = this.calculateTitleSimilarity(rec.title, allTitles[j]);
+          if (stringSimilarity >= 0.70) {
+            // 문자열 유사도가 높으면 (70% 이상) 제외 (가수명 제외하고 제목만 비교)
             isDuplicate = true;
-            console.log(`[RecommendationService] 유사한 제목 제외 (임베딩): "${rec.title}" vs "${queueTitles[j]}" (유사도: ${(similarity * 100).toFixed(1)}%)`);
+            // j < queueTitles.length이면 대기열 또는 현재 재생 중인 음악
+            const isCurrentPlaying = j === 0 && queue.length > 0; // 첫 번째 항목이 현재 재생 중인 음악일 가능성
+            const source = j < queueTitles.length 
+              ? (isCurrentPlaying ? '현재 재생 중인 음악' : '대기열') 
+              : '이전 추천';
+            const queueSongTitle = this.extractSongTitle(allTitles[j]);
+            console.log(`[RecommendationService] 유사한 제목 제외 (가수명 제외, ${source}): "${rec.title}" (제목: "${recSongTitle}") vs "${allTitles[j]}" (제목: "${queueSongTitle}") (유사도: ${(stringSimilarity * 100).toFixed(1)}%)`);
             break;
+          }
+        }
+      }
+
+      // 5. 임베딩 기반 유사도 확인 (가수명 제외, 노래 제목만 비교) - 대기열 + 이전 추천 기록 모두 확인
+      if (!isDuplicate) {
+        // 노래 제목만 임베딩 생성하여 비교 (성능 최적화: 배치 처리)
+        try {
+          // 대기열과 이전 추천의 노래 제목만 추출
+          const allSongTitles = allTitles.map(title => this.extractSongTitle(title));
+          
+          // 노래 제목 임베딩 생성 (배치 처리)
+          const allSongTitleEmbeddings = await embeddingService.generateEmbeddings(allSongTitles);
+          const recSongTitleEmbedding = await embeddingService.generateEmbedding(recSongTitle);
+          
+          for (let j = 0; j < allSongTitleEmbeddings.length; j++) {
+            const similarity = SimilarityCalculator.cosineSimilarity(
+              recSongTitleEmbedding,
+              allSongTitleEmbeddings[j]
+            );
+            
+            // 임계값을 더 낮춤 (0.80 → 0.70)
+            const effectiveThreshold = Math.min(titleSimilarityThreshold, 0.70);
+            if (similarity >= effectiveThreshold) {
+              // 임베딩 유사도가 임계값 이상이면 제외 (가수명 제외하고 제목만 비교)
+              isDuplicate = true;
+              // j < queueTitleEmbeddings.length이면 대기열 또는 현재 재생 중인 음악
+              const isCurrentPlaying = j === 0 && queue.length > 0; // 첫 번째 항목이 현재 재생 중인 음악일 가능성
+              const source = j < queueTitleEmbeddings.length 
+                ? (isCurrentPlaying ? '현재 재생 중인 음악' : '대기열') 
+                : '이전 추천';
+              const queueSongTitle = allSongTitles[j];
+              console.log(`[RecommendationService] 유사한 제목 제외 (임베딩, 가수명 제외, ${source}): "${rec.title}" (제목: "${recSongTitle}") vs "${allTitles[j]}" (제목: "${queueSongTitle}") (유사도: ${(similarity * 100).toFixed(1)}%)`);
+              break;
+            }
+          }
+        } catch (embeddingError) {
+          // 임베딩 생성 실패 시 기존 방식 사용 (전체 제목 비교)
+          console.warn('[RecommendationService] 노래 제목 임베딩 생성 실패, 전체 제목 비교로 폴백:', embeddingError.message);
+          for (let j = 0; j < allTitleEmbeddings.length; j++) {
+            const similarity = SimilarityCalculator.cosineSimilarity(
+              recEmbedding,
+              allTitleEmbeddings[j]
+            );
+            
+            const effectiveThreshold = Math.min(titleSimilarityThreshold, 0.70);
+            if (similarity >= effectiveThreshold) {
+              isDuplicate = true;
+              const source = j < queueTitleEmbeddings.length ? '대기열' : '이전 추천';
+              console.log(`[RecommendationService] 유사한 제목 제외 (임베딩, ${source}): "${rec.title}" vs "${allTitles[j]}" (유사도: ${(similarity * 100).toFixed(1)}%)`);
+              break;
+            }
           }
         }
       }
 
       if (!isDuplicate) {
         filtered.push(rec);
+        seenVideoIds.add(rec.videoId);
+        seenNormalizedTitles.add(recNormalizedTitle);
+        // 임베딩이 있는 경우에만 추가
+        if (recEmbedding) {
+          seenEmbeddings.push(recEmbedding);
+        }
       }
     }
 
-    console.log(`[RecommendationService] 중복 제거: ${recommendations.length}개 → ${filtered.length}개`);
+    console.log(`[RecommendationService] 중복 제거: ${recommendations.length}개 → ${filtered.length}개 (대기열: ${queue.length}개, 이전 추천: ${previousRecommendations.length}개)`);
+    
+    // 디버깅: 이전 추천 기록 상세 로그
+    if (previousRecommendations.length > 0) {
+      console.log('[RecommendationService] 이전 추천 기록 상세:', previousRecommendations.slice(-5).map(rec => ({
+        title: rec.title,
+        videoId: rec.videoId
+      })));
+    }
+    
     return filtered;
   }
 
@@ -517,24 +1642,343 @@ class RecommendationService {
   }
 
   /**
+   * YouTube Data API로 비디오 상세 정보 가져오기 (서버에 요청)
+   * @param {string[]} videoIds - 비디오 ID 배열
+   * @returns {Promise<Object[]>} 비디오 상세 정보 배열
+   */
+  async getYouTubeVideoDetails(videoIds) {
+    return new Promise((resolve, reject) => {
+      if (!this.socket) {
+        reject(new Error('Socket 연결이 필요합니다'));
+        return;
+      }
+      if (videoIds.length === 0) {
+        resolve([]);
+        return;
+      }
+
+      const timeout = setTimeout(() => {
+        reject(new Error('YouTube 비디오 상세 정보 조회 타임아웃'));
+      }, 15000); // 15초 타임아웃
+
+      this.socket.emit('getVideoDetails', videoIds);
+
+      this.socket.once('videoDetails', (data) => {
+        clearTimeout(timeout);
+        resolve(data);
+      });
+
+      this.socket.once('videoDetailsError', (error) => {
+        clearTimeout(timeout);
+        reject(new Error(error.message || 'YouTube 비디오 상세 정보 조회 실패'));
+      });
+    });
+  }
+
+  /**
+   * YouTube API를 통한 재생 가능 여부 확인 (서버에 요청)
+   * @param {string[]} videoIds - 비디오 ID 배열
+   * @returns {Promise<Object>} 재생 가능 여부 결과 { videoId: { isPlayable, reason } }
+   */
+  async checkVideoPlayability(videoIds) {
+    return new Promise((resolve, reject) => {
+      if (!this.socket) {
+        reject(new Error('Socket 연결이 필요합니다'));
+        return;
+      }
+      if (videoIds.length === 0) {
+        resolve({});
+        return;
+      }
+
+      const timeout = setTimeout(() => {
+        reject(new Error('재생 가능 여부 확인 타임아웃'));
+      }, 20000); // 20초 타임아웃
+
+      this.socket.emit('checkVideoPlayability', videoIds);
+
+      this.socket.once('playabilityCheckResults', (data) => {
+        clearTimeout(timeout);
+        resolve(data);
+      });
+
+      this.socket.once('playabilityCheckError', (error) => {
+        clearTimeout(timeout);
+        reject(new Error(error.message || '재생 가능 여부 확인 실패'));
+      });
+    });
+  }
+
+  /**
+   * 채널 정보 확인 (공식 채널 우선순위 확인용)
+   * @param {string[]} videoIds - 비디오 ID 배열
+   * @returns {Promise<Object>} 채널 정보 결과 { videoId: { channelId, channelTitle, channelType, isOfficial, isMusicLabel } }
+   */
+  async getChannelInfo(videoIds) {
+    return new Promise((resolve, reject) => {
+      if (!this.socket) {
+        reject(new Error('Socket 연결이 필요합니다'));
+        return;
+      }
+      if (videoIds.length === 0) {
+        resolve({});
+        return;
+      }
+
+      const timeout = setTimeout(() => {
+        reject(new Error('채널 정보 확인 타임아웃'));
+      }, 15000); // 15초 타임아웃
+
+      this.socket.emit('getChannelInfo', videoIds);
+
+      this.socket.once('channelInfoResults', (data) => {
+        clearTimeout(timeout);
+        resolve(data);
+      });
+
+      this.socket.once('channelInfoError', (error) => {
+        clearTimeout(timeout);
+        reject(new Error(error.message || '채널 정보 확인 실패'));
+      });
+    });
+  }
+
+  /**
+   * 채널 우선순위 점수 계산
+   * @param {Object} channelInfo - 채널 정보
+   * @returns {number} 채널 우선순위 점수 (0~1)
+   */
+  calculateChannelPriority(channelInfo) {
+    if (!channelInfo) return 0.5; // 기본값
+    
+    if (channelInfo.isOfficial) {
+      return 1.0; // 공식 채널: 최고 점수
+    } else if (channelInfo.isMusicLabel) {
+      return 0.8; // 음악 레이블: 높은 점수
+    } else if (channelInfo.channelType === 'user') {
+      return 0.5; // 사용자 업로드: 중간 점수
+    }
+    
+    return 0.5; // 기본값
+  }
+
+  /**
    * 추천 생성 (메인 메서드)
    * @param {Array} queue - 현재 대기열
    * @param {Object} musicLikes - 좋아요 데이터 { videoId: count }
    * @param {string} searchQuery - 선택적 검색어
+   * @param {string} musicRegion - 음악 지역 기준 ('all', 'domestic', 'international')
    * @returns {Promise<Object>} 추천 결과
    */
-  async generateRecommendations(queue, musicLikes, searchQuery = null) {
+  async generateRecommendations(queue, musicLikes, searchQuery = null, musicRegion = 'all') {
     const startTime = Date.now();
 
     try {
       // 1. 상위 하트 음악 선택
       const topSongs = this.getTopLikedSongs(queue, musicLikes, 10);
       
+      // 대기열이 비어있으면 기본 장르(발라드)로 조회순 추천
       if (topSongs.length === 0) {
+        console.log('[RecommendationService] 대기열이 비어있어 기본 장르(발라드)로 조회순 추천을 시작합니다.');
+        
+        // 기본 장르(발라드) 검색 쿼리 생성
+        let defaultQueries = [];
+        if (musicRegion === 'domestic') {
+          // 국내 발라드
+          defaultQueries = [
+            'korean ballad 발라드',
+            'korean ballad songs',
+            'k-pop ballad 발라드',
+            '한국 발라드',
+            '국내 발라드'
+          ];
+        } else if (musicRegion === 'international') {
+          // 해외 발라드
+          defaultQueries = [
+            'ballad songs',
+            'popular ballad',
+            'best ballad',
+            'ballad music',
+            'ballad hits'
+          ];
+        } else {
+          // 전체 (국내 + 해외)
+          defaultQueries = [
+            'ballad 발라드',
+            'ballad songs',
+            'popular ballad',
+            'best ballad',
+            'korean ballad',
+            'ballad music'
+          ];
+        }
+        
+        // 검색 실행
+        let allSearchResults = [];
+        for (const query of defaultQueries.slice(0, 5)) {
+          try {
+            const results = await this.searchYouTube(query, 30);
+            allSearchResults.push(...results);
+            console.log(`[RecommendationService] 기본 장르 검색 쿼리 "${query}" 결과: ${results.length}개`);
+          } catch (error) {
+            console.warn(`[RecommendationService] 기본 장르 검색 쿼리 실패: ${query}`, error);
+          }
+        }
+        
+        // videoId 기준으로 중복 제거
+        const uniqueResultsMap = new Map();
+        for (const result of allSearchResults) {
+          if (!uniqueResultsMap.has(result.videoId)) {
+            uniqueResultsMap.set(result.videoId, result);
+          }
+        }
+        
+        let searchResults = Array.from(uniqueResultsMap.values());
+        console.log(`[RecommendationService] 기본 장르 검색 결과: ${searchResults.length}개`);
+        
+        if (searchResults.length === 0) {
+          return {
+            recommendations: [],
+            topSongs: [],
+            reasoning: '기본 장르(발라드) 검색 결과가 없습니다.',
+            processingTime: Date.now() - startTime,
+          };
+        }
+        
+        // 필터링: 모음집, 쇼츠, 재생 불가능한 음악 제외
+        searchResults = searchResults.filter(result => 
+          !this.isCompilation(result) && 
+          !this.isShorts(result) && 
+          this.isPlayableMusic(result)
+        );
+        
+        // 국내/해외 필터링 적용
+        if (musicRegion === 'domestic') {
+          const beforeCount = searchResults.length;
+          searchResults = searchResults.filter(result => {
+            const extractedArtist = this.extractArtist(result.title);
+            return this.isDomesticMusic(result.title, extractedArtist);
+          });
+          const filteredCount = beforeCount - searchResults.length;
+          if (filteredCount > 0) {
+            console.log(`[RecommendationService] 국내 음악만 필터링: ${filteredCount}개 제외`);
+          }
+        } else if (musicRegion === 'international') {
+          const beforeCount = searchResults.length;
+          searchResults = searchResults.filter(result => {
+            const extractedArtist = this.extractArtist(result.title);
+            return !this.isDomesticMusic(result.title, extractedArtist);
+          });
+          const filteredCount = beforeCount - searchResults.length;
+          if (filteredCount > 0) {
+            console.log(`[RecommendationService] 해외 음악만 필터링: ${filteredCount}개 제외`);
+          }
+        }
+        
+        // YouTube API를 통한 재생 가능 여부 확인
+        if (searchResults.length > 0) {
+          try {
+            const videoIds = searchResults.map(result => result.videoId);
+            const playabilityResults = await this.checkVideoPlayability(videoIds);
+            
+            searchResults = searchResults.filter(result => {
+              const checkResult = playabilityResults[result.videoId];
+              if (checkResult && !checkResult.isPlayable) {
+                return false;
+              }
+              return true;
+            });
+          } catch (error) {
+            console.warn('[RecommendationService] 재생 가능 여부 확인 실패:', error);
+          }
+        }
+        
+        // YouTube Data API로 조회수 정보 가져오기 (조회순 정렬용)
+        let videoDetailsMap = new Map();
+        try {
+          const videoIds = searchResults.map(res => res.videoId);
+          const details = await this.getYouTubeVideoDetails(videoIds);
+          details.forEach(d => {
+            videoDetailsMap.set(d.videoId, d);
+          });
+          console.log('[RecommendationService] YouTube Data API로 조회수 정보 가져옴.');
+        } catch (apiError) {
+          console.warn('[RecommendationService] YouTube Data API 호출 실패:', apiError.message);
+        }
+        
+        // 조회수 기준으로 정렬 (조회순)
+        searchResults.sort((a, b) => {
+          const detailA = videoDetailsMap.get(a.videoId);
+          const detailB = videoDetailsMap.get(b.videoId);
+          
+          // 조회수 정보가 있으면 조회수 기준 정렬
+          if (detailA && detailB && detailA.viewCount !== undefined && detailB.viewCount !== undefined) {
+            return detailB.viewCount - detailA.viewCount; // 내림차순 (조회수 높은 순)
+          }
+          
+          // 조회수 정보가 없으면 검색 결과 순서 유지
+          return 0;
+        });
+        
+        // 이전 추천 가수명 제외 필터링 (대기열이 비어있을 때)
+        // filterDuplicates를 호출하여 이전 추천 기록의 가수명을 제외
+        console.log(`[RecommendationService] ========== 대기열이 비어있어 이전 추천 가수명 제외 필터링 시작 ==========`);
+        console.log(`[RecommendationService] 검색 결과: ${searchResults.length}개`);
+        
+        // 검색 결과의 가수명 미리 확인 (디버깅용)
+        const searchResultArtists = searchResults.slice(0, 10).map(rec => {
+          const artist = this.extractArtist(rec.title);
+          const normalized = artist ? this.normalizeArtistName(artist) : null;
+          return { title: rec.title, artist: artist || '추출 실패', normalized: normalized || '정규화 실패' };
+        });
+        console.log(`[RecommendationService] 검색 결과 상위 10개 가수명:`, searchResultArtists);
+        
+        const filteredRecommendations = await this.filterDuplicates(searchResults, queue, 0.70);
+        console.log(`[RecommendationService] 이전 추천 가수명 제외 필터링 완료: ${searchResults.length}개 → ${filteredRecommendations.length}개`);
+        
+        // 필터링된 결과의 가수명 확인 (디버깅용)
+        if (filteredRecommendations.length > 0) {
+          const filteredArtists = filteredRecommendations.slice(0, 10).map(rec => {
+            const artist = this.extractArtist(rec.title);
+            const normalized = artist ? this.normalizeArtistName(artist) : null;
+            return { title: rec.title, artist: artist || '추출 실패', normalized: normalized || '정규화 실패' };
+          });
+          console.log(`[RecommendationService] 필터링 후 상위 10개 가수명:`, filteredArtists);
+        }
+        
+        // 필터링 후에도 결과가 없으면 필터링 없이 상위 20개 선택 (폴백)
+        let recommendations;
+        if (filteredRecommendations.length > 0) {
+          recommendations = filteredRecommendations.slice(0, 20);
+          console.log(`[RecommendationService] 기본 장르(발라드) 조회순 추천 결과 (이전 추천 가수명 제외): ${recommendations.length}개`);
+          
+          // 추천된 가수명 로그 출력 (디버깅용)
+          const recommendedArtists = recommendations.map(rec => {
+            const artist = this.extractArtist(rec.title);
+            const normalized = artist ? this.normalizeArtistName(artist) : null;
+            return { title: rec.title, artist: artist || '추출 실패', normalized: normalized || '정규화 실패' };
+          });
+          console.log(`[RecommendationService] ========== 최종 추천된 가수명 목록 (이전 추천 가수명 제외됨) ==========`, recommendedArtists);
+        } else {
+          // 필터링 결과가 없으면 필터링 없이 상위 20개 선택
+          recommendations = searchResults.slice(0, 20);
+          console.warn(`[RecommendationService] ⚠️ 이전 추천 가수명 제외 필터링 후 결과가 없어 필터링 없이 추천합니다: ${recommendations.length}개`);
+          
+          // 필터링 없이 추천된 가수명 로그 출력 (디버깅용)
+          const recommendedArtists = recommendations.map(rec => {
+            const artist = this.extractArtist(rec.title);
+            const normalized = artist ? this.normalizeArtistName(artist) : null;
+            return { title: rec.title, artist: artist || '추출 실패', normalized: normalized || '정규화 실패' };
+          });
+          console.warn(`[RecommendationService] ⚠️ 필터링 없이 추천된 가수명 목록:`, recommendedArtists);
+        }
+        
+        console.log(`[RecommendationService] 기본 장르(발라드) 조회순 추천 결과: ${recommendations.length}개`);
+        
         return {
-          recommendations: [],
+          recommendations,
           topSongs: [],
-          reasoning: '대기열에 음악이 없습니다.',
+          reasoning: `대기열이 비어있어 기본 장르(발라드)로 조회순 추천했습니다. (${musicRegion === 'domestic' ? '국내' : musicRegion === 'international' ? '해외' : '전체'})`,
           processingTime: Date.now() - startTime,
         };
       }
@@ -544,7 +1988,27 @@ class RecommendationService {
       const embeddings = await embeddingService.generateEmbeddings(titles);
 
       // 3. 가중 평균 임베딩 계산
-      const weights = topSongs.map(song => song.likeCount || 0.1); // 0인 경우 0.1로 설정
+      // 하트가 있는 경우: 하트 개수 사용
+      // 하트가 없는 경우: 대기열 순서에 따른 가중치 사용 (앞에 있는 곡일수록 높은 가중치)
+      const totalLikes = topSongs.reduce((sum, song) => sum + (song.likeCount || 0), 0);
+      const hasLikes = totalLikes > 0;
+      
+      const weights = topSongs.map((song, index) => {
+        if (hasLikes) {
+          // 하트가 있는 경우: 하트 개수 사용 (0인 경우 0.1로 설정)
+          return song.likeCount || 0.1;
+        } else {
+          // 하트가 없는 경우: 대기열 순서에 따른 가중치 (앞에 있는 곡일수록 높은 가중치)
+          // 첫 번째 곡: 1.0, 두 번째 곡: 0.9, 세 번째 곡: 0.8, ... (0.1씩 감소, 최소 0.1)
+          const queueWeight = Math.max(0.1, 1.0 - (index * 0.1));
+          return queueWeight;
+        }
+      });
+      
+      if (!hasLikes) {
+        console.log('[RecommendationService] 하트가 없어 대기열 순서 가중치를 사용합니다:', weights);
+      }
+      
       const weightedEmbedding = SimilarityCalculator.calculateWeightedAverage(
         embeddings,
         weights
@@ -552,21 +2016,39 @@ class RecommendationService {
 
       // 4. YouTube 검색 실행 (다양한 검색 쿼리 사용)
       let searchResults = [];
+      let allSearchResults = []; // 폴백을 위해 스코프 밖에서도 접근 가능하도록
       
       if (searchQuery) {
         // 사용자 지정 검색어가 있으면 그것만 사용
         searchResults = await this.searchYouTube(searchQuery, 50);
+        allSearchResults = searchResults; // 폴백용
       } else {
-        // 다양한 검색 쿼리 생성 및 병합
-        const searchQueries = this.generateDiverseSearchQueries(topSongs);
-        console.log('[RecommendationService] 생성된 검색 쿼리:', searchQueries);
+        // 이전 추천 가수명 가져오기 (검색 쿼리 생성 시 제외하기 위해)
+        const previousRecommendations = this.getPreviousRecommendations();
+        const previousArtists = new Set();
+        previousRecommendations.forEach(rec => {
+          const artist = this.extractArtist(rec.title);
+          if (artist) {
+            const normalizedArtist = this.normalizeArtistName(artist);
+            if (normalizedArtist) {
+              previousArtists.add(normalizedArtist);
+            }
+          }
+        });
+        console.log('[RecommendationService] 검색 쿼리 생성 시 제외할 이전 추천 가수명:', Array.from(previousArtists));
         
-        // 여러 검색 쿼리로 검색 결과 수집
-        const allSearchResults = [];
-        for (const query of searchQueries.slice(0, 3)) { // 최대 3개 쿼리만 사용
+        // 다양한 검색 쿼리 생성 및 병합 (지역 필터 포함, 이전 추천 가수명 제외)
+        const searchQueries = this.generateDiverseSearchQueries(topSongs, musicRegion, previousArtists);
+        console.log('[RecommendationService] 생성된 검색 쿼리:', searchQueries, `(지역: ${musicRegion})`);
+        
+        // 여러 검색 쿼리로 검색 결과 수집 (아티스트 기반 검색 우선)
+        allSearchResults = [];
+        // 아티스트 기반 검색 쿼리를 우선적으로 더 많이 사용 (최대 5개)
+        for (const query of searchQueries.slice(0, 5)) {
           try {
             const results = await this.searchYouTube(query, 30);
             allSearchResults.push(...results);
+            console.log(`[RecommendationService] 검색 쿼리 "${query}" 결과: ${results.length}개`);
           } catch (error) {
             console.warn(`[RecommendationService] 검색 쿼리 실패: ${query}`, error);
           }
@@ -581,25 +2063,172 @@ class RecommendationService {
         }
         
         searchResults = Array.from(uniqueResultsMap.values());
-        console.log(`[RecommendationService] 병합된 검색 결과: ${searchResults.length}개`);
+        console.log(`[RecommendationService] 병합된 검색 결과: ${searchResults.length}개 (원본: ${allSearchResults.length}개)`);
+        
+        // 검색 결과가 없으면 에러
+        if (searchResults.length === 0) {
+          console.error('[RecommendationService] 검색 결과가 없습니다.');
+          return {
+            recommendations: [],
+            topSongs,
+            reasoning: '검색 결과가 없습니다. 다른 검색어를 시도해주세요.',
+            processingTime: Date.now() - startTime,
+          };
+        }
       }
 
       // 모음집/플레이리스트 필터링
-      const filteredSearchResults = searchResults.filter(result => !this.isCompilation(result));
+      let filteredSearchResults = searchResults.filter(result => !this.isCompilation(result));
       const compilationCount = searchResults.length - filteredSearchResults.length;
       if (compilationCount > 0) {
         console.log(`[RecommendationService] 모음집 제외: ${compilationCount}개`);
       }
+
+      // 쇼츠 필터링
+      const beforeShortsCount = filteredSearchResults.length;
+      filteredSearchResults = filteredSearchResults.filter(result => !this.isShorts(result));
+      const shortsFilteredCount = beforeShortsCount - filteredSearchResults.length;
+      if (shortsFilteredCount > 0) {
+        console.log(`[RecommendationService] 쇼츠 제외: ${shortsFilteredCount}개`);
+      }
+
+      // 재생 가능한 음악만 필터링 (기본 필드 검증)
+      const beforePlayableCount = filteredSearchResults.length;
+      filteredSearchResults = filteredSearchResults.filter(result => this.isPlayableMusic(result));
+      const playableFilteredCount = beforePlayableCount - filteredSearchResults.length;
+      if (playableFilteredCount > 0) {
+        console.log(`[RecommendationService] 기본 필드 검증으로 제외: ${playableFilteredCount}개`);
+      }
+
+      // YouTube API를 통한 실제 재생 가능 여부 확인 (배치 처리)
+      // API 확인 실패 시에도 기본 검증 결과는 유지하도록 수정
+      if (filteredSearchResults.length > 0) {
+        try {
+          const videoIds = filteredSearchResults.map(result => result.videoId);
+          const playabilityResults = await this.checkVideoPlayability(videoIds);
+          
+          const beforeApiCheckCount = filteredSearchResults.length;
+          filteredSearchResults = filteredSearchResults.filter(result => {
+            const checkResult = playabilityResults[result.videoId];
+            // checkResult가 없으면 재생 가능한 것으로 간주 (API 응답에 없어도 기본 검증 통과)
+            if (checkResult && !checkResult.isPlayable) {
+              console.log(`[RecommendationService] 재생 불가능한 영상 제외: "${result.title}" (${checkResult.reason})`);
+              return false;
+            }
+            // checkResult가 없거나 isPlayable이 true면 포함
+            return true;
+          });
+          
+          const apiFilteredCount = beforeApiCheckCount - filteredSearchResults.length;
+          if (apiFilteredCount > 0) {
+            console.log(`[RecommendationService] YouTube API 재생 가능 여부 확인으로 제외: ${apiFilteredCount}개`);
+          }
+          
+          // 필터링 후 결과가 없으면 경고
+          if (filteredSearchResults.length === 0 && beforeApiCheckCount > 0) {
+            console.warn(`[RecommendationService] 재생 가능 여부 확인 후 모든 결과가 제외됨. 기본 검증 결과로 폴백합니다.`);
+            // 기본 검증 결과로 폴백 (API 확인 전 상태로 복원)
+            filteredSearchResults = searchResults.filter(result => 
+              this.isPlayableMusic(result) && 
+              !this.isCompilation(result) && 
+              !this.isShorts(result)
+            );
+          }
+        } catch (apiError) {
+          console.warn('[RecommendationService] 재생 가능 여부 확인 실패, 기본 검증만 사용:', apiError.message);
+          // API 확인 실패 시 기본 검증 결과만 사용 (이미 filteredSearchResults에 있음)
+        }
+      }
+      
+      // 필터링 후 결과 확인
+      if (filteredSearchResults.length === 0) {
+        console.warn('[RecommendationService] 필터링 후 검색 결과가 없습니다. 필터링 조건을 완화합니다.');
+        // 필터링 조건 완화: 기본 필드 검증만 통과한 결과 사용
+        filteredSearchResults = searchResults.filter(result => this.isPlayableMusic(result));
+        console.log(`[RecommendationService] 완화된 필터링 후 결과: ${filteredSearchResults.length}개`);
+      }
+
+      // 단일 곡 검증 필터링 (라이브, 커버, 리믹스, 뮤직비디오 등 제외)
+      // 단, 결과가 너무 적으면 필터링 완화
+      const beforeSingleTrackCount = filteredSearchResults.length;
+      const singleTrackFiltered = filteredSearchResults.filter(result => this.isValidSingleTrack(result));
+      const singleTrackFilteredCount = beforeSingleTrackCount - singleTrackFiltered.length;
+      
+      // 필터링 후 결과가 충분하면(5개 이상) 적용, 아니면 완화
+      if (singleTrackFiltered.length >= 5 || beforeSingleTrackCount < 10) {
+        filteredSearchResults = singleTrackFiltered;
+        if (singleTrackFilteredCount > 0) {
+          console.log(`[RecommendationService] 단일 곡이 아닌 항목 제외: ${singleTrackFilteredCount}개`);
+        }
+      } else {
+        console.warn(`[RecommendationService] 단일 곡 필터링 후 결과가 부족(${singleTrackFiltered.length}개). 필터링을 완화합니다.`);
+        // 필터링 완화: 기본적인 키워드만 제외
+        filteredSearchResults = filteredSearchResults.filter(result => {
+          if (!result || !result.title) return false;
+          const title = result.title.toLowerCase();
+          // 가장 명확한 제외 키워드만 체크
+          const strictExcludeKeywords = ['live', 'concert', 'cover', 'remix', '라이브', '공연', '커버', '리믹스'];
+          return !strictExcludeKeywords.some(keyword => title.includes(keyword));
+        });
+        console.log(`[RecommendationService] 완화된 단일 곡 필터링 후 결과: ${filteredSearchResults.length}개`);
+      }
+
+      // 지역 필터 적용 (모음집 및 단일 곡 필터링 후)
+      // 채널 정보는 나중에 가져오므로, 먼저 제목/아티스트 기준으로 필터링
+      if (musicRegion === 'domestic') {
+        // 국내 음악만 필터링 (한국 가수 기준)
+        const beforeCount = filteredSearchResults.length;
+        filteredSearchResults = filteredSearchResults.filter(result => {
+          const extractedArtist = this.extractArtist(result.title);
+          return this.isDomesticMusic(result.title, extractedArtist);
+        });
+        const filteredCount = beforeCount - filteredSearchResults.length;
+        if (filteredCount > 0) {
+          console.log(`[RecommendationService] 국내 음악만 필터링 (한국 가수 기준, 1차): ${filteredCount}개 제외`);
+        }
+      } else if (musicRegion === 'international') {
+        // 해외 음악만 필터링 (외국 가수 기준)
+        const beforeCount = filteredSearchResults.length;
+        filteredSearchResults = filteredSearchResults.filter(result => {
+          const extractedArtist = this.extractArtist(result.title);
+          return !this.isDomesticMusic(result.title, extractedArtist);
+        });
+        const filteredCount = beforeCount - filteredSearchResults.length;
+        if (filteredCount > 0) {
+          console.log(`[RecommendationService] 해외 음악만 필터링 (외국 가수 기준, 1차): ${filteredCount}개 제외`);
+        }
+      }
+
       searchResults = filteredSearchResults;
 
       if (searchResults.length === 0) {
-        return {
-          recommendations: [],
-          topSongs,
-          reasoning: '검색 결과가 없습니다.',
-          processingTime: Date.now() - startTime,
-        };
+        console.error('[RecommendationService] 모든 필터링 단계를 통과한 검색 결과가 없습니다.');
+        // 원본 검색 결과로 폴백 시도
+        if (allSearchResults && allSearchResults.length > 0) {
+          console.warn('[RecommendationService] 필터링 전 검색 결과로 폴백합니다.');
+          // videoId 기준으로 중복 제거
+          const uniqueResultsMap = new Map();
+          for (const result of allSearchResults) {
+            if (!uniqueResultsMap.has(result.videoId)) {
+              uniqueResultsMap.set(result.videoId, result);
+            }
+          }
+          searchResults = Array.from(uniqueResultsMap.values()).slice(0, 50); // 원본 검색 결과 사용
+          console.log(`[RecommendationService] 폴백 검색 결과: ${searchResults.length}개`);
+        } else {
+          console.error('[RecommendationService] 원본 검색 결과도 없습니다.');
+          return {
+            recommendations: [],
+            topSongs,
+            reasoning: '검색 결과가 없습니다. 필터링 조건을 완화하거나 다른 검색어를 시도해주세요.',
+            processingTime: Date.now() - startTime,
+          };
+        }
       }
+      
+      console.log(`[RecommendationService] 필터링 완료, 최종 검색 결과: ${searchResults.length}개`);
+      
+      console.log(`[RecommendationService] 필터링 완료, 최종 검색 결과: ${searchResults.length}개`);
 
       // 5. 검색 결과 임베딩 생성
       const searchTitles = searchResults.map(result => result.title);
@@ -611,30 +2240,82 @@ class RecommendationService {
         searchEmbeddings
       );
 
-      // 7. 인기도 점수 계산 (검색 결과 순서 기반)
-      const popularityScores = searchResults.map((result, index) =>
-        this.calculatePopularityByIndex(index)
-      );
+      // 7. 인기도 점수 계산 (YouTube Data API 또는 검색 결과 순서)
+      let videoDetailsMap = new Map();
+      try {
+        const videoIds = searchResults.map(res => res.videoId);
+        const details = await this.getYouTubeVideoDetails(videoIds);
+        details.forEach(d => {
+          videoDetailsMap.set(d.videoId, d);
+          // 재생 가능 여부 정보도 함께 저장
+          if (d.isPlayable !== undefined) {
+            if (!d.isPlayable) {
+              console.log(`[RecommendationService] 재생 불가능한 영상 발견 (인기도 조회 중): ${d.videoId}`);
+            }
+          }
+        });
+        console.log('[RecommendationService] YouTube Data API로 인기도 정보 가져옴.');
+      } catch (apiError) {
+        console.warn('[RecommendationService] YouTube Data API 호출 실패, 검색 결과 순서로 폴백:', apiError.message);
+      }
 
-      // 8. 아티스트 일치 점수 계산 및 추출
-      const topSongArtists = topSongs
-        .map(song => this.extractArtist(song.title))
-        .filter(Boolean);
+      const popularityScores = searchResults.map((result, index) => {
+        const detail = videoDetailsMap.get(result.videoId);
+        if (detail && detail.viewCount !== undefined && detail.publishedAt) {
+          // 방법 1: YouTube Data API 기반 (조회수 우선)
+          return this.calculatePopularityByViewCount(
+            detail.viewCount,
+            detail.publishedAt
+          );
+        } else {
+          // 방법 2: 검색 결과 순서 기반 (폴백)
+          return this.calculatePopularityByIndex(index);
+        }
+      });
+
+      // 8. 아티스트 일치 점수 계산 및 추출 (하트 수 가중치 적용)
+      // 아티스트별 하트 수 집계
+      const artistLikeCounts = new Map();
+      topSongs.forEach(song => {
+        const artist = this.extractArtist(song.title);
+        if (artist) {
+          const currentCount = artistLikeCounts.get(artist) || 0;
+          artistLikeCounts.set(artist, currentCount + (song.likeCount || 0));
+        }
+      });
+      
+      // 하트 수 기준으로 정렬된 아티스트 목록 (하트가 많은 순)
+      const sortedArtists = Array.from(artistLikeCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .map(([artist]) => artist);
+      
+      // 최대 하트 수 계산 (정규화용)
+      const maxLikeCount = Math.max(...Array.from(artistLikeCounts.values()), 1);
       
       const artistMatches = searchResults.map((result) => {
         const resultArtist = this.extractArtist(result.title);
         
-        if (!resultArtist || topSongArtists.length === 0) {
+        if (!resultArtist || sortedArtists.length === 0) {
           return 0;
         }
 
-        // 아티스트 일치 확인
-        const match = topSongArtists.some(artist =>
-          this.calculateArtistMatch(artist, resultArtist) > 0
-        );
+        // 아티스트 일치 확인 및 하트 수 기반 가중치 적용
+        let maxMatchScore = 0;
+        for (const artist of sortedArtists) {
+          if (this.calculateArtistMatch(artist, resultArtist) > 0) {
+            // 하트 수에 비례한 점수 계산 (0.5 ~ 1.0)
+            const artistLikeCount = artistLikeCounts.get(artist) || 0;
+            const normalizedLikeCount = artistLikeCount / maxLikeCount;
+            // 하트가 많을수록 높은 점수 (최소 0.5, 최대 1.0)
+            const matchScore = 0.5 + (normalizedLikeCount * 0.5);
+            maxMatchScore = Math.max(maxMatchScore, matchScore);
+          }
+        }
 
-        return match ? 1.0 : 0.0;
+        return maxMatchScore;
       });
+      
+      console.log('[RecommendationService] 아티스트별 하트 수:', Array.from(artistLikeCounts.entries()).slice(0, 5));
 
       // 8-1. 장르 일치 점수 계산
       const topSongGenres = topSongs
@@ -655,15 +2336,63 @@ class RecommendationService {
 
         return match ? 1.0 : 0.0;
       });
-      
+
+      // 8-2. 채널 정보 확인 (공식 채널 우선순위 확인용 및 국내/해외 재확인)
+      let channelInfoMap = new Map();
+      try {
+        const videoIds = searchResults.map(res => res.videoId);
+        const channelInfos = await this.getChannelInfo(videoIds);
+        Object.entries(channelInfos).forEach(([videoId, info]) => {
+          channelInfoMap.set(videoId, info);
+        });
+        console.log('[RecommendationService] YouTube Data API로 채널 정보 가져옴.');
+        
+        // 채널 정보를 활용한 국내/해외 재필터링 (더 정확한 판단)
+        if (musicRegion === 'domestic') {
+          const beforeChannelFilterCount = searchResults.length;
+          searchResults = searchResults.filter(result => {
+            const channelInfo = channelInfoMap.get(result.videoId);
+            const extractedArtist = this.extractArtist(result.title);
+            // 채널 정보를 포함하여 재확인
+            return this.isDomesticMusic(result.title, extractedArtist, channelInfo);
+          });
+          const channelFilteredCount = beforeChannelFilterCount - searchResults.length;
+          if (channelFilteredCount > 0) {
+            console.log(`[RecommendationService] 국내 음악만 필터링 (채널 정보 기준, 2차): ${channelFilteredCount}개 제외`);
+          }
+        } else if (musicRegion === 'international') {
+          const beforeChannelFilterCount = searchResults.length;
+          searchResults = searchResults.filter(result => {
+            const channelInfo = channelInfoMap.get(result.videoId);
+            const extractedArtist = this.extractArtist(result.title);
+            // 채널 정보를 포함하여 재확인
+            return !this.isDomesticMusic(result.title, extractedArtist, channelInfo);
+          });
+          const channelFilteredCount = beforeChannelFilterCount - searchResults.length;
+          if (channelFilteredCount > 0) {
+            console.log(`[RecommendationService] 해외 음악만 필터링 (채널 정보 기준, 2차): ${channelFilteredCount}개 제외`);
+          }
+        }
+      } catch (channelError) {
+        console.warn('[RecommendationService] 채널 정보 확인 실패, 기본값 사용:', channelError.message);
+        // 채널 정보 확인 실패 시 기본값 사용
+      }
+
       // 아티스트 및 장르 정보를 결과에 저장 (다양성 계산용)
-      const searchResultsWithArtists = searchResults.map((result, index) => ({
-        ...result,
-        extractedArtist: this.extractArtist(result.title),
-        extractedGenre: this.extractGenre(result.title),
-        artistMatch: artistMatches[index],
-        genreMatch: genreMatches[index],
-      }));
+      const searchResultsWithArtists = searchResults.map((result, index) => {
+        const channelInfo = channelInfoMap.get(result.videoId);
+        const channelPriority = this.calculateChannelPriority(channelInfo);
+        
+        return {
+          ...result,
+          extractedArtist: this.extractArtist(result.title),
+          artistMatch: artistMatches[index],
+          genreMatch: genreMatches[index],
+          qualityBonus: this.calculateQualityBonus(result.title), // 음질 보너스 계산
+          channelInfo: channelInfo, // 채널 정보 저장
+          channelPriority: channelPriority, // 채널 우선순위 점수
+        };
+      });
 
       // 9. 최종 점수 계산 (다양성 보너스 포함)
       const scoredResults = [];
@@ -679,7 +2408,10 @@ class RecommendationService {
           result.artistMatch,
           popularityScores[index],
           0, // 다양성 보너스는 나중에 추가
-          result.genreMatch // 장르 일치 점수 포함
+          result.genreMatch, // 장르 일치 점수 포함
+          musicRegion, // 지역 기준 전달
+          result.qualityBonus, // 음질 보너스 포함
+          result.channelPriority // 채널 우선순위 포함
         ),
       }));
       
@@ -693,8 +2425,9 @@ class RecommendationService {
           selectedArtists
         );
         
-        // 최종 점수 = initialScore + (diversityBonus * 가중치 0.10)
-        const finalScore = result.initialScore + (diversityBonus * 0.10);
+        // 최종 점수 = initialScore + (diversityBonus * 가중치, 지역별로 다름)
+        const diversityWeight = musicRegion === 'domestic' ? 0.02 : (musicRegion === 'international' ? 0.02 : 0.05);
+        const finalScore = result.initialScore + (diversityBonus * diversityWeight);
         
         scoredResults.push({
           ...result,
@@ -714,11 +2447,119 @@ class RecommendationService {
       // 10. 최종 점수 기준으로 다시 정렬
       scoredResults.sort((a, b) => b.finalScore - a.finalScore);
 
-      // 11. 중복 제거 (videoId + 제목 유사도 확인, 임계값 강화: 0.9 → 0.85)
-      const uniqueResults = await this.filterDuplicates(scoredResults, queue, 0.85);
+      // 11. 중복 제거 (videoId + 제목 유사도 확인, 임계값 강화: 0.80 → 0.75)
+      // 이전 추천 기록도 포함하여 중복 제거 (임계값 강화: 0.75 → 0.70)
+      const uniqueResults = await this.filterDuplicates(scoredResults, queue, 0.70);
+      console.log(`[RecommendationService] 중복 제거 완료: ${scoredResults.length}개 → ${uniqueResults.length}개`);
+
+      // 11-1. 최종 재생 가능 여부 확인 (상위 추천 결과에 대해)
+      // 단, 결과가 부족하면 필터링 완화
+      let finalRecommendations = uniqueResults.slice(0, 30); // 상위 30개에 대해 재생 가능 여부 확인
+      if (finalRecommendations.length > 0) {
+        try {
+          const finalVideoIds = finalRecommendations.map(rec => rec.videoId);
+          const finalPlayabilityResults = await this.checkVideoPlayability(finalVideoIds);
+          
+          const beforeFinalCheckCount = finalRecommendations.length;
+          const playableFiltered = finalRecommendations.filter(rec => {
+            const checkResult = finalPlayabilityResults[rec.videoId];
+            if (checkResult && !checkResult.isPlayable) {
+              console.log(`[RecommendationService] 최종 재생 불가능한 영상 제외: "${rec.title}" (${checkResult.reason})`);
+              return false;
+            }
+            // checkResult가 없으면 기본 검증만 통과한 것으로 간주 (API 실패 시 포함)
+            return true;
+          });
+          
+          const finalFilteredCount = beforeFinalCheckCount - playableFiltered.length;
+          
+          // 필터링 후 결과가 충분하면(5개 이상) 적용, 아니면 완화
+          if (playableFiltered.length >= 5 || beforeFinalCheckCount < 10) {
+            finalRecommendations = playableFiltered;
+            if (finalFilteredCount > 0) {
+              console.log(`[RecommendationService] 최종 재생 가능 여부 확인으로 제외: ${finalFilteredCount}개`);
+            }
+          } else {
+            console.warn(`[RecommendationService] 최종 재생 가능 여부 확인 후 결과가 부족(${playableFiltered.length}개). 필터링을 완화합니다.`);
+            // 필터링 완화: checkResult가 없거나 isPlayable이 true면 포함
+            finalRecommendations = finalRecommendations.filter(rec => {
+              const checkResult = finalPlayabilityResults[rec.videoId];
+              // checkResult가 없거나 isPlayable이 true면 포함
+              return !checkResult || checkResult.isPlayable !== false;
+            });
+            console.log(`[RecommendationService] 완화된 최종 필터링 후 결과: ${finalRecommendations.length}개`);
+          }
+        } catch (finalApiError) {
+          console.warn('[RecommendationService] 최종 재생 가능 여부 확인 실패, 기본 검증 결과만 사용:', finalApiError.message);
+          // API 확인 실패 시 기본 검증 결과만 사용
+        }
+      }
+      
+      // 최종 결과 확인 및 폴백 로직
+      console.log(`[RecommendationService] 최종 필터링 전 상태: uniqueResults=${uniqueResults.length}개, finalRecommendations=${finalRecommendations.length}개`);
+      
+      if (finalRecommendations.length === 0) {
+        if (uniqueResults.length === 0) {
+          console.warn('[RecommendationService] 모든 추천 결과가 대기열이나 이전 추천에 있어 추천할 수 없습니다.');
+          console.warn('[RecommendationService] 이전 추천 기록 일부를 무시하고 재시도합니다.');
+          
+          // 이전 추천 기록을 일부 무시하고 재시도 (최근 10개만 체크)
+          const previousRecommendations = this.getPreviousRecommendations();
+          const recentRecommendations = previousRecommendations.slice(-10); // 최근 10개만
+          
+          // 이전 추천 기록을 줄여서 다시 중복 제거 시도
+          const relaxedUniqueResults = await this.filterDuplicatesWithLimitedHistory(
+            scoredResults, 
+            queue, 
+            0.70,
+            recentRecommendations // 최근 10개만 체크
+          );
+          
+          if (relaxedUniqueResults.length > 0) {
+            console.log(`[RecommendationService] 이전 추천 기록 완화 후 결과: ${relaxedUniqueResults.length}개`);
+            finalRecommendations = relaxedUniqueResults.slice(0, 20);
+          } else {
+            // 그래도 없으면 scoredResults에서 상위 결과 사용 (중복 체크 완화)
+            console.warn('[RecommendationService] 완화된 중복 제거 후에도 결과가 없습니다. 점수 기준 상위 결과를 사용합니다.');
+            finalRecommendations = scoredResults.slice(0, 20);
+          }
+          
+          console.warn('[RecommendationService] 디버그 정보:', {
+            topSongsCount: topSongs.length,
+            searchResultsCount: searchResults.length,
+            scoredResultsCount: scoredResults.length,
+            uniqueResultsCount: uniqueResults.length,
+            relaxedUniqueResultsCount: relaxedUniqueResults?.length || 0,
+            finalRecommendationsCount: finalRecommendations.length
+          });
+        } else {
+          console.warn('[RecommendationService] 최종 필터링 후 결과가 없습니다. 중복 제거 결과를 사용합니다.');
+          finalRecommendations = uniqueResults.slice(0, 20);
+        }
+      }
 
       // 12. 상위 20개 선택
-      const recommendations = uniqueResults.slice(0, 20);
+      const recommendations = finalRecommendations.slice(0, 20);
+      
+      // 최종 결과 확인
+      if (recommendations.length === 0) {
+        console.error('[RecommendationService] 최종 추천 결과가 없습니다.');
+        console.error('[RecommendationService] 디버그 정보:', {
+          topSongsCount: topSongs.length,
+          searchResultsCount: searchResults.length,
+          scoredResultsCount: scoredResults.length,
+          uniqueResultsCount: uniqueResults.length,
+          finalRecommendationsCount: finalRecommendations.length,
+          recommendationsCount: recommendations.length
+        });
+      } else {
+        console.log(`[RecommendationService] 최종 추천 결과: ${recommendations.length}개`);
+        // 디버깅: 추천 결과의 videoId와 제목 출력
+        console.log('[RecommendationService] 추천 결과 상세:', recommendations.map(r => ({
+          videoId: r.videoId,
+          title: r.title
+        })));
+      }
 
       // 13. 추천 이유 생성
       const topSongTitles = topSongs.slice(0, 3).map(song => song.title);

@@ -38,6 +38,17 @@ const socket = io(getServerUrl(), {
 // 전역에서 socket 접근 가능하도록 설정 (YouTube API에서 사용)
 window.socket = socket;
 
+// 고유 세션 ID 생성 및 관리 (새로고침 후에도 유지)
+const getOrCreateSessionId = () => {
+  let sessionId = localStorage.getItem('musicSelectorSessionId');
+  if (!sessionId) {
+    // 고유한 세션 ID 생성 (타임스탬프 + 랜덤 문자열)
+    sessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+    localStorage.setItem('musicSelectorSessionId', sessionId);
+  }
+  return sessionId;
+};
+
 function App() {
   const [currentPlaying, setCurrentPlaying] = useState(null);
   const [queue, setQueue] = useState([]);
@@ -45,6 +56,7 @@ function App() {
   const [isConnected, setIsConnected] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [hasControl, setHasControl] = useState(false);
+  const sessionIdRef = useRef(getOrCreateSessionId()); // 세션 ID ref
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authPassword, setAuthPassword] = useState('');
   const [showPlaylistModal, setShowPlaylistModal] = useState(false);
@@ -102,6 +114,11 @@ function App() {
     socket.on('connect', () => {
       console.log('서버에 연결되었습니다.');
       setIsConnected(true);
+      
+      // 연결 시 세션 ID를 서버에 전달 (제어권 복원을 위해)
+      const sessionId = sessionIdRef.current;
+      console.log('세션 ID 전달:', sessionId);
+      socket.emit('registerSession', { sessionId });
     });
 
     socket.on('disconnect', () => {
@@ -607,6 +624,7 @@ function App() {
           onClose={() => setShowPlaylistModal(false)}
           queue={queue}
           socket={socket}
+          hasControl={hasControl}
         />
 
         {/* 플레이리스트 전송 확인 모달 */}

@@ -57,3 +57,89 @@
 .recommendation-error button:hover {
   background: #d32f2f;
 }
+
+.recommendation-button-container {
+  display: inline-flex;
+  align-items: flex-start;
+  position: relative;
+  flex-direction: column;
+}
+
+.recommendation-settings {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 0;
+  margin-top: 8px;
+  z-index: 100;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  white-space: nowrap;
+  transition: background-color 0.3s, border-color 0.3s;
+}
+
+.recommendation-settings label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  transition: color 0.3s;
+}
+
+.recommendation-region-select {
+  padding: 6px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.3s, border-color 0.3s, color 0.3s;
+}
+
+.recommendation-region-select:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.recommendation-confirm-btn {
+  padding: 6px 12px;
+  background: #667eea;
+  color: white;
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 0.2s;
+}
+
+.recommendation-confirm-btn:hover:not(:disabled) {
+  background: #5568d3;
+}
+
+.recommendation-confirm-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.recommendation-cancel-btn {
+  padding: 6px 12px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 0;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.recommendation-cancel-btn:hover {
+  background: var(--bg-secondary);
+  border-color: var(--border-hover);
+}

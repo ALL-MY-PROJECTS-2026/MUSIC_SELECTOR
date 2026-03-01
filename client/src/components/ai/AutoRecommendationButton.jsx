@@ -14,27 +14,47 @@ const AutoRecommendationButton = ({ socket, hasControl = false }) => {
   const [lastAddedTitle, setLastAddedTitle] = useState(null);
   const [error, setError] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [musicRegion, setMusicRegion] = useState('all'); // 'all', 'domestic', 'international'
   
   const intervalRef = useRef(null);
   const processingRef = useRef(false); // 중복 실행 방지
   const isActiveRef = useRef(false); // 최신 isActive 상태 참조용
+  const hasControlRef = useRef(false); // 최신 hasControl 상태 참조용
 
   // isActive 상태가 변경될 때마다 ref 업데이트
   useEffect(() => {
     isActiveRef.current = isActive;
   }, [isActive]);
 
+  // hasControl 상태가 변경될 때마다 ref 업데이트
+  useEffect(() => {
+    hasControlRef.current = hasControl;
+  }, [hasControl]);
+
+  // 자동 추천 중지 함수 (먼저 정의)
+  const handleStop = () => {
+    setIsActive(false);
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+    setLastAddedTitle(null);
+    setError(null);
+    console.log('[AutoRecommendation] 자동 추천 중지');
+  };
+
   // 자동 추천 실행 함수
   const executeAutoRecommendation = async () => {
-    if (processingRef.current || !socket || !isActiveRef.current || !hasControl) {
+    // ref를 사용하여 최신 상태 확인
+    if (processingRef.current || !socket || !isActiveRef.current || !hasControlRef.current) {
       console.log('[AutoRecommendation] 실행 조건 체크:', {
         processing: processingRef.current,
         socket: !!socket,
         isActive: isActiveRef.current,
-        hasControl: hasControl
+        hasControl: hasControlRef.current
       });
       // 제어권이 없으면 자동 중지
-      if (!hasControl && isActiveRef.current) {
+      if (!hasControlRef.current && isActiveRef.current) {
         handleStop();
         setError('제어권이 없어 자동 추천이 중지되었습니다.');
       }
@@ -67,25 +87,45 @@ const AutoRecommendationButton = ({ socket, hasControl = false }) => {
 
       const { queue: queueData, musicLikes } = queueAndLikesData;
 
+      // 대기열이 비어있어도 기본 장르(발라드)로 조회순 추천 가능
       if (queueData.length === 0) {
-        console.log('[AutoRecommendation] 대기열이 비어있어 추천을 건너뜁니다.');
-        return;
+        console.log('[AutoRecommendation] 대기열이 비어있어 기본 장르(발라드)로 조회순 추천을 시작합니다.');
+      } else {
+        console.log('[AutoRecommendation] 추천 생성 시작, 대기열:', queueData.length, '개');
       }
-
-      console.log('[AutoRecommendation] 추천 생성 시작, 대기열:', queueData.length, '개');
 
       // 추천 서비스 생성
       const recommendationService = new RecommendationService(socket);
 
-      // 추천 생성 (1곡만 필요하므로 상위 1개만)
+      // 추천 생성 (1곡만 필요하므로 상위 1개만, 지역 필터 포함)
       const result = await recommendationService.generateRecommendations(
         queueData,
-        musicLikes
+        musicLikes,
+        null, // searchQuery
+        musicRegion // musicRegion: 'all', 'domestic', 'international'
       );
 
       if (result.recommendations && result.recommendations.length > 0) {
-        // 첫 번째 추천 음악을 대기열에 추가
-        const recommendedMusic = result.recommendations[0];
+        // 대기열에 없는 첫 번째 추천 음악 찾기
+        const queueVideoIds = new Set(queueData.map(m => m.videoId));
+        let recommendedMusic = null;
+
+        // 추천 결과에서 대기열에 없는 첫 번째 노래 찾기
+        for (const rec of result.recommendations) {
+          if (!queueVideoIds.has(rec.videoId)) {
+            recommendedMusic = rec;
+            break;
+          }
+        }
+
+        // 모든 추천 결과가 대기열에 있으면 건너뛰기
+        if (!recommendedMusic) {
+          console.log('[AutoRecommendation] 모든 추천 결과가 대기열에 있어 건너뜁니다.');
+          console.log('[AutoRecommendation] 대기열 videoIds:', Array.from(queueVideoIds));
+          console.log('[AutoRecommendation] 추천 결과 videoIds:', result.recommendations.map(r => r.videoId));
+          setError('모든 추천 결과가 이미 대기열에 있습니다.');
+          return;
+        }
 
         console.log('[AutoRecommendation] 추천 음악 선택:', recommendedMusic.title);
         console.log('[AutoRecommendation] requestMusic 이벤트 전송:', {
@@ -130,7 +170,9 @@ const AutoRecommendationButton = ({ socket, hasControl = false }) => {
         setLastAddedTitle(recommendedMusic.title);
         console.log('[AutoRecommendation] 자동 추천 음악 추가 완료:', recommendedMusic.title);
       } else {
-        console.log('[AutoRecommendation] 추천 결과가 없습니다. (추천 개수:', result.recommendations?.length || 0, ')');
+        const errorMsg = `추천 결과가 없습니다. (추천 개수: ${result.recommendations?.length || 0})`;
+        console.log('[AutoRecommendation]', errorMsg);
+        setError(errorMsg);
       }
     } catch (err) {
       console.error('[AutoRecommendation] 자동 추천 실패:', err);
@@ -168,19 +210,28 @@ const AutoRecommendationButton = ({ socket, hasControl = false }) => {
     
     // 즉시 한 번 실행 (약간의 지연을 두어 상태 업데이트가 완료되도록)
     setTimeout(() => {
-      if (isActiveRef.current) {
+      if (isActiveRef.current && hasControlRef.current) {
         console.log('[AutoRecommendation] 즉시 실행 시작');
         executeAutoRecommendation();
+      } else {
+        console.log('[AutoRecommendation] 즉시 실행 취소: isActive=', isActiveRef.current, 'hasControl=', hasControlRef.current);
       }
     }, 500);
 
     // 주기마다 실행
     intervalRef.current = setInterval(() => {
-      if (isActiveRef.current) {
+      if (isActiveRef.current && hasControlRef.current) {
         console.log('[AutoRecommendation] 주기 실행 시작');
         executeAutoRecommendation();
       } else {
-        console.log('[AutoRecommendation] isActive가 false여서 실행 중단');
+        console.log('[AutoRecommendation] 실행 중단:', {
+          isActive: isActiveRef.current,
+          hasControl: hasControlRef.current
+        });
+        if (!hasControlRef.current && isActiveRef.current) {
+          handleStop();
+          setError('제어권이 없어 자동 추천이 중지되었습니다.');
+        }
         if (intervalRef.current) {
           clearInterval(intervalRef.current);
           intervalRef.current = null;
@@ -191,17 +242,6 @@ const AutoRecommendationButton = ({ socket, hasControl = false }) => {
     console.log(`[AutoRecommendation] 자동 추천 시작: ${intervalMinutes}분마다 실행 (${intervalMs}ms)`);
   };
 
-  // 자동 추천 중지
-  const handleStop = () => {
-    setIsActive(false);
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
-    setLastAddedTitle(null);
-    setError(null);
-    console.log('[AutoRecommendation] 자동 추천 중지');
-  };
 
   // 컴포넌트 언마운트 시 정리
   useEffect(() => {
@@ -263,6 +303,18 @@ const AutoRecommendationButton = ({ socket, hasControl = false }) => {
                         {option.label}
                       </option>
                     ))}
+                  </select>
+                </label>
+                <label>
+                  음악 기준:
+                  <select
+                    value={musicRegion}
+                    onChange={(e) => setMusicRegion(e.target.value)}
+                    className="auto-recommendation-select"
+                  >
+                    <option value="all">전체</option>
+                    <option value="domestic">국내</option>
+                    <option value="international">해외</option>
                   </select>
                 </label>
                 <button
