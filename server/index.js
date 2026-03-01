@@ -195,11 +195,11 @@ io.on('connection', (socket) => {
         }
         // playNextMusic을 호출하여 대기열의 첫 번째 곡 재생
         // 클라이언트 준비 시간을 확보하기 위해 지연 시간 증가
-        console.log('[requestMusic] playNextMusic 호출 예약 (500ms 지연)');
+        console.log('[requestMusic] playNextMusic 호출 예약 (800ms 지연)');
         setTimeout(() => {
           console.log('[requestMusic] playNextMusic 호출 실행');
           playNextMusic();
-        }, 500);
+        }, 800);
       } else if (isIdle && !hasControlForPlay) {
         console.log('[requestMusic] 유휴 상태이지만 제어권이 없어서 대기 중 (음악은 대기열에 추가됨)', {
           isPlaying,
@@ -756,7 +756,7 @@ function startPlaying(music) {
     ...currentPlaying,
     playStartTime: playStartTime
   };
-  console.log('[startPlaying] musicPlaying 이벤트 전송 예약 (500ms 지연)', {
+  console.log('[startPlaying] musicPlaying 이벤트 전송 예약 (800ms 지연)', {
     controlSessionId: controlSessionId,
     musicTitle: currentPlaying.title
   });
@@ -765,7 +765,7 @@ function startPlaying(music) {
     // 모든 클라이언트에게 전송 (제어권이 없는 클라이언트도 썸네일 업데이트를 위해)
     io.emit('musicPlaying', playData);
     console.log('[startPlaying] musicPlaying 이벤트 전송 완료 (모든 클라이언트)');
-  }, 500);
+  }, 800);
   
   console.log(`재생 시작: ${currentPlaying.title} (재생 시간: ${musicDuration ? musicDuration + '초' : '알 수 없음'})`);
   

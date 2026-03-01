@@ -10,6 +10,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
   const pauseTimeRef = useRef(null); // 일시정지 시점 저장
   const previousHasControlRef = useRef(false); // 이전 제어권 상태 추적 (제어권 획득 시점 감지용)
   const previousVideoIdRef = useRef(null); // 이전 videoId 추적 (새 음악 시작 감지용)
+  const previousMusicRef = useRef(null); // 이전 music 추적 (music null에서 새 music으로 변경 감지용)
 
   // YouTube IFrame API 로드
   useEffect(() => {
@@ -79,6 +80,14 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
   // 플레이어 생성 (모든 클라이언트에서 생성, 재생은 제어권 있는 곳에서만)
   useEffect(() => {
     const effectStartTime = Date.now();
+    
+    // 이전 music 상태 확인 (music null에서 새 music으로 변경 감지)
+    const wasMusicNull = previousMusicRef.current === null;
+    const isNewMusicFromNull = wasMusicNull && music !== null;
+    
+    // previousMusicRef 업데이트
+    previousMusicRef.current = music;
+    
     console.log('[플레이어 생성 useEffect] 실행:', {
       apiReady,
       hasMusic: !!music,
@@ -88,6 +97,8 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
       hasPlayer: !!youtubePlayerRef.current,
       playerReady,
       isPlaying,
+      wasMusicNull,
+      isNewMusicFromNull,
       timestamp: effectStartTime
     });
     
@@ -114,23 +125,40 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
     }
 
     // 기존 플레이어가 있고 videoId가 다르면 새 비디오 로드
+    // 또는 music이 null에서 새 music으로 변경되었으면 무조건 새 비디오 로드
     if (youtubePlayerRef.current && playerReady) {
       let currentVideoId = null;
+      let playerState = null;
       try {
-        currentVideoId = youtubePlayerRef.current.getVideoData()?.video_id;
+        const videoData = youtubePlayerRef.current.getVideoData();
+        currentVideoId = videoData?.video_id;
+        playerState = youtubePlayerRef.current.getPlayerState();
       } catch (e) {
         console.log('[플레이어 생성 useEffect] 현재 비디오 ID 가져오기 오류:', e);
-        // 오류 발생 시 플레이어를 재생성
+        // 오류 발생 시 무조건 새 비디오 로드
         currentVideoId = null;
       }
       
       console.log('[플레이어 생성 useEffect] 기존 플레이어 확인:', {
         currentVideoId,
         newVideoId: music.videoId,
-        isDifferent: currentVideoId !== music.videoId
+        isDifferent: currentVideoId !== music.videoId,
+        playerState: playerState,
+        playerStateName: playerState !== null ? {
+          '-1': 'ENDED',
+          '0': 'UNSTARTED',
+          '1': 'ENDED',
+          '2': 'PLAYING',
+          '3': 'PAUSED',
+          '5': 'CUED',
+          '3': 'BUFFERING'
+        }[playerState] || 'UNKNOWN' : 'UNKNOWN',
+        isNewMusicFromNull: isNewMusicFromNull
       });
       
-      if (currentVideoId !== music.videoId) {
+      // videoId가 다르거나, getVideoData가 실패했거나, 플레이어가 ENDED 상태이면 새 비디오 로드
+      // 또는 music이 null에서 새 music으로 변경되었으면 무조건 새 비디오 로드
+      if (isNewMusicFromNull || currentVideoId !== music.videoId || currentVideoId === null || playerState === window.YT.PlayerState.ENDED) {
         const loadStartTime = Date.now();
         console.log('[플레이어 생성 useEffect] 새 비디오 로드 시작:', {
           videoId: music.videoId,
@@ -171,22 +199,22 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
             elapsedSinceStart: loadCallTime - loadStartTime
           });
           
-          // 제어권이 있고 재생 중일 때만 재생 시도
-          if (isPlaying && hasControl) {
+          // 제어권이 있으면 재생 시도 (music prop 변경을 재생 트리거로 사용, isPlaying 무관)
+          if (hasControl) {
             // 모바일에서 비디오 로딩이 완료될 때까지 충분한 시간을 주기 위해 재생 시도를 여러 번 시도
             // loadVideoById 직후에는 플레이어가 UNSTARTED 상태일 수 있으므로 약간의 지연 후 시작
             const attemptPlay = (attemptCount = 0) => {
-              if (!youtubePlayerRef.current || !isPlaying || !hasControl) {
-                console.log('[loadVideoById] 재생 시도 중단: 플레이어 없음, 재생 중 아님, 또는 제어권 없음');
+              if (!youtubePlayerRef.current || !hasControl) {
+                console.log('[loadVideoById] 재생 시도 중단: 플레이어 없음, 또는 제어권 없음');
                 return;
               }
               
               const maxAttempts = 20; // 최대 20번 시도 (약 10초) - 15에서 20으로 증가
-              const initialDelay = attemptCount === 0 ? 500 : 500; // 첫 시도는 500ms 후, 이후는 500ms마다 (800ms에서 500ms로 단축)
+              const initialDelay = attemptCount === 0 ? 800 : 500; // 첫 시도는 800ms 후, 이후는 500ms마다
               
               setTimeout(() => {
-                if (!youtubePlayerRef.current || !isPlaying || !hasControl) {
-                  console.log('[loadVideoById] 재생 시도 중단: 플레이어 없음, 재생 중 아님, 또는 제어권 없음');
+                if (!youtubePlayerRef.current || !hasControl) {
+                  console.log('[loadVideoById] 재생 시도 중단: 플레이어 없음, 또는 제어권 없음');
                   return;
                 }
                 
@@ -217,7 +245,6 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                     전체시간: duration,
                     진행률: duration > 0 ? `${(currentTime / duration * 100).toFixed(2)}%` : 'N/A',
                     경과시간: checkTime - loadStartTime,
-                    isPlaying,
                     hasControl,
                     timestamp: checkTime
                   });
@@ -300,18 +327,25 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
     
     if (youtubePlayerRef.current && playerReady) {
       let currentVideoId = null;
+      let playerState = null;
       try {
-        currentVideoId = youtubePlayerRef.current.getVideoData()?.video_id;
+        const videoData = youtubePlayerRef.current.getVideoData();
+        currentVideoId = videoData?.video_id;
+        playerState = youtubePlayerRef.current.getPlayerState();
       } catch (e) {
         console.log('[플레이어 생성 useEffect] 현재 비디오 ID 가져오기 오류:', e);
         needsRecreate = true;
       }
       
-      // videoId가 다르면 플레이어 재생성
-      if (currentVideoId !== music.videoId) {
-        console.log('[플레이어 생성 useEffect] videoId 불일치 - 플레이어 재생성 필요:', {
+      // videoId가 다르거나, getVideoData가 실패했거나, 플레이어가 ENDED 상태이면 플레이어 재생성
+      // 또는 music이 null에서 새 music으로 변경되었으면 무조건 플레이어 재생성
+      if (isNewMusicFromNull || currentVideoId !== music.videoId || currentVideoId === null || playerState === window.YT.PlayerState.ENDED) {
+        console.log('[플레이어 생성 useEffect] 플레이어 재생성 필요:', {
           currentVideoId,
-          newVideoId: music.videoId
+          newVideoId: music.videoId,
+          playerState: playerState,
+          isNewMusicFromNull: isNewMusicFromNull,
+          reason: isNewMusicFromNull ? 'music null에서 새 music으로 변경' : currentVideoId === null ? 'getVideoData 실패' : currentVideoId !== music.videoId ? 'videoId 불일치' : '플레이어 ENDED 상태'
         });
         needsRecreate = true;
       }
@@ -610,8 +644,8 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
             }
             // 버퍼링 중이거나 준비 중일 때도 서버 제어 유지
             // CUED 상태는 비디오가 로드되어 재생 준비가 된 상태
-            // 제어권이 있을 때만 재생 시도
-            if (event.data === window.YT.PlayerState.CUED && isPlaying && hasControl) {
+            // 제어권이 있으면 재생 시도 (music prop 변경을 재생 트리거로 사용, isPlaying 무관)
+            if (event.data === window.YT.PlayerState.CUED && hasControl) {
               console.log('[onStateChange] CUED 상태 감지 - 즉시 재생 시도');
               // CUED 상태에서 즉시 재생 시도 (모바일에서 지연될 수 있으므로)
               if (youtubePlayerRef.current && typeof youtubePlayerRef.current.playVideo === 'function') {
@@ -621,7 +655,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                   
                   // 재생이 시작되었는지 확인 (약간의 지연 후)
                   setTimeout(() => {
-                    if (youtubePlayerRef.current && isPlaying && hasControl) {
+                    if (youtubePlayerRef.current && hasControl) {
                       const state = youtubePlayerRef.current.getPlayerState();
                       if (state !== window.YT.PlayerState.PLAYING) {
                         // 재생이 시작되지 않았으면 다시 시도
@@ -636,6 +670,18 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                   }, 500);
                 } catch (e) {
                   console.log('[onStateChange] CUED 상태에서 재생 시도 오류:', e);
+                }
+              }
+            }
+            // UNSTARTED 상태도 재생 시도 (loadVideoById 직후 발생할 수 있음)
+            if (event.data === window.YT.PlayerState.UNSTARTED && hasControl) {
+              console.log('[onStateChange] UNSTARTED 상태 감지 - 재생 시도');
+              if (youtubePlayerRef.current && typeof youtubePlayerRef.current.playVideo === 'function') {
+                try {
+                  youtubePlayerRef.current.playVideo();
+                  console.log('[onStateChange] UNSTARTED 상태에서 재생 시도 완료');
+                } catch (e) {
+                  console.log('[onStateChange] UNSTARTED 상태에서 재생 시도 오류:', e);
                 }
               }
             }
@@ -710,6 +756,30 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
       }
     };
   }, [apiReady, music, hasControl, isPlaying]); // music 객체 전체를 의존성에 추가하여 music 변경 시 플레이어 재생성
+
+  // music이 null이 되었을 때 플레이어 정리
+  useEffect(() => {
+    const wasMusicNull = previousMusicRef.current === null;
+    const isMusicNull = music === null;
+    previousMusicRef.current = music;
+    
+    // music이 null이 되었을 때 플레이어 정리
+    if (!wasMusicNull && isMusicNull) {
+      console.log('[music null 감지] 플레이어 정리 시작');
+      if (youtubePlayerRef.current) {
+        try {
+          youtubePlayerRef.current.destroy();
+          console.log('[music null 감지] 플레이어 제거 완료');
+        } catch (e) {
+          console.log('[music null 감지] 플레이어 제거 오류 (무시):', e);
+        }
+        youtubePlayerRef.current = null;
+      }
+      setPlayerReady(false);
+      endedSentRef.current = false;
+      pauseTimeRef.current = null;
+    }
+  }, [music]);
 
   // music이 변경될 때 endedSentRef 리셋 (새 음악 재생 시)
   useEffect(() => {
@@ -842,27 +912,25 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
     }
 
     try {
-      if (isPlaying) {
-        // 서버가 재생 중이라고 하면 재생
-        // 단, 일시정지 위치가 저장되어 있으면 사용자가 의도적으로 일시정지한 것이므로 자동 재생하지 않음
-        if (pauseTimeRef.current !== null) {
-          console.log('[재생 상태 동기화] 일시정지 위치가 저장되어 있어서 자동 재생하지 않음:', pauseTimeRef.current);
-          return; // 일시정지 상태 유지
-        }
-        
-        // 현재 플레이어의 비디오 ID 확인
-        let currentVideoId = null;
-        try {
-          currentVideoId = youtubePlayerRef.current.getVideoData()?.video_id;
-        } catch (e) {
-          console.log('[재생 상태 동기화] 현재 비디오 ID 가져오기 오류:', e);
-        }
-        
-        // 비디오 ID가 다르면 새 비디오 로드 (다음 곡으로 넘어갔을 때)
-        if (currentVideoId !== music.videoId) {
-          console.log('[재생 상태 동기화] 비디오 ID 불일치 - 새 비디오 로드:', {
+      // 현재 플레이어의 비디오 ID 확인
+      let currentVideoId = null;
+      let playerState = null;
+      try {
+        const videoData = youtubePlayerRef.current.getVideoData();
+        currentVideoId = videoData?.video_id;
+        playerState = youtubePlayerRef.current.getPlayerState();
+      } catch (e) {
+        console.log('[재생 상태 동기화] 현재 비디오 ID 가져오기 오류:', e);
+      }
+      
+      // 비디오 ID가 다르거나, getVideoData가 실패했거나, 플레이어가 ENDED 상태이면 새 비디오 로드
+      // music prop 변경을 재생 트리거로 사용 (isPlaying 무관)
+      if (currentVideoId !== music.videoId || currentVideoId === null || playerState === window.YT.PlayerState.ENDED) {
+          console.log('[재생 상태 동기화] 새 비디오 로드 필요:', {
             currentVideoId,
-            newVideoId: music.videoId
+            newVideoId: music.videoId,
+            playerState: playerState,
+            reason: currentVideoId === null ? 'getVideoData 실패' : currentVideoId !== music.videoId ? 'videoId 불일치' : '플레이어 ENDED 상태'
           });
           try {
             // 기존 플레이어가 있으면 먼저 일시정지 (새 비디오 로드 전 정리)
@@ -876,10 +944,10 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
             console.log('[재생 상태 동기화] 새 비디오 로드 완료:', music.videoId, 'hasControl:', hasControl);
             
             // loadVideoById 후 재생 시도 (약간의 지연 후)
-            // 제어권이 있을 때만 재생 시도
+            // 제어권이 있으면 재생 시도 (music prop 변경을 재생 트리거로 사용, isPlaying 무관)
             if (hasControl) {
               setTimeout(() => {
-                if (youtubePlayerRef.current && isPlaying && hasControl && typeof youtubePlayerRef.current.playVideo === 'function') {
+                if (youtubePlayerRef.current && hasControl && typeof youtubePlayerRef.current.playVideo === 'function') {
                   try {
                     youtubePlayerRef.current.playVideo();
                     console.log('[재생 상태 동기화] 새 비디오 로드 후 재생 시도 완료');
@@ -887,7 +955,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                     console.log('[재생 상태 동기화] 새 비디오 로드 후 재생 시도 오류:', e);
                   }
                 }
-              }, 500);
+              }, 800);
             }
           } catch (e) {
             console.log('[재생 상태 동기화] 새 비디오 로드 오류:', e);
@@ -895,39 +963,47 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
           return; // 비디오 로드 후 재생은 loadVideoById의 onStateChange에서 처리됨
         }
         
-        if (typeof youtubePlayerRef.current.playVideo === 'function') {
-          const playerState = youtubePlayerRef.current.getPlayerState();
-          console.log('[재생 상태 동기화] 서버는 재생 중, 플레이어 상태:', playerState, '비디오 ID:', currentVideoId);
+        // 서버가 재생 중이라고 하면 재생
+        // 단, 일시정지 위치가 저장되어 있으면 사용자가 의도적으로 일시정지한 것이므로 자동 재생하지 않음
+        if (isPlaying) {
+          if (pauseTimeRef.current !== null) {
+            console.log('[재생 상태 동기화] 일시정지 위치가 저장되어 있어서 자동 재생하지 않음:', pauseTimeRef.current);
+            return; // 일시정지 상태 유지
+          }
           
-          // 이미 재생 중이 아니면 재생
-          // CUED, UNSTARTED, PAUSED, BUFFERING 등 모든 상태에서 재생 시도
-          // 모바일에서 CUED 상태에서 재생이 시작되지 않을 수 있음
-          if (playerState !== window.YT.PlayerState.PLAYING) {
-            console.log('[재생 상태 동기화] 재생 시도, 현재 상태:', playerState);
-            try {
-              youtubePlayerRef.current.playVideo();
-              
-              // 재생이 시작되었는지 확인 (약간의 지연 후)
-              setTimeout(() => {
-                if (youtubePlayerRef.current && isPlaying) {
-                  const state = youtubePlayerRef.current.getPlayerState();
-                  if (state !== window.YT.PlayerState.PLAYING) {
-                    // 재생이 시작되지 않았으면 다시 시도
-                    console.log('[재생 상태 동기화] 재생이 시작되지 않음, 재시도, 현재 상태:', state);
-                    if (typeof youtubePlayerRef.current.playVideo === 'function') {
-                      youtubePlayerRef.current.playVideo();
+          if (typeof youtubePlayerRef.current.playVideo === 'function') {
+            const playerState = youtubePlayerRef.current.getPlayerState();
+            console.log('[재생 상태 동기화] 서버는 재생 중, 플레이어 상태:', playerState, '비디오 ID:', currentVideoId);
+            
+            // 이미 재생 중이 아니면 재생
+            // CUED, UNSTARTED, PAUSED, BUFFERING 등 모든 상태에서 재생 시도
+            // 모바일에서 CUED 상태에서 재생이 시작되지 않을 수 있음
+            if (playerState !== window.YT.PlayerState.PLAYING) {
+              console.log('[재생 상태 동기화] 재생 시도, 현재 상태:', playerState);
+              try {
+                youtubePlayerRef.current.playVideo();
+                
+                // 재생이 시작되었는지 확인 (약간의 지연 후)
+                setTimeout(() => {
+                  if (youtubePlayerRef.current && isPlaying) {
+                    const state = youtubePlayerRef.current.getPlayerState();
+                    if (state !== window.YT.PlayerState.PLAYING) {
+                      // 재생이 시작되지 않았으면 다시 시도
+                      console.log('[재생 상태 동기화] 재생이 시작되지 않음, 재시도, 현재 상태:', state);
+                      if (typeof youtubePlayerRef.current.playVideo === 'function') {
+                        youtubePlayerRef.current.playVideo();
+                      }
+                    } else {
+                      console.log('[재생 상태 동기화] 재생 성공!');
                     }
-                  } else {
-                    console.log('[재생 상태 동기화] 재생 성공!');
                   }
-                }
-              }, 500);
-            } catch (e) {
-              console.log('[재생 상태 동기화] 재생 시도 오류:', e);
+                }, 500);
+              } catch (e) {
+                console.log('[재생 상태 동기화] 재생 시도 오류:', e);
+              }
             }
           }
-        }
-      } else {
+        } else {
         // 서버가 중지했다고 하면 일시정지
         if (typeof youtubePlayerRef.current.pauseVideo === 'function') {
           const playerState = youtubePlayerRef.current.getPlayerState();
@@ -1037,10 +1113,10 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
             youtubePlayerRef.current.playVideo();
           }
           
-          // 서버가 재생 중인데 플레이어가 CUED 상태면 재생 시도
+          // 플레이어가 CUED 상태면 재생 시도 (music prop 변경을 재생 트리거로 사용, isPlaying 무관)
           // 모바일에서 loadVideoById 후 CUED 상태에서 재생이 시작되지 않을 수 있음
-          if (isPlaying && playerState === window.YT.PlayerState.CUED && pauseTimeRef.current === null) {
-            console.log('[주기적 상태 확인] CUED 상태 감지 - 재생 시도 (서버는 재생 중인데 플레이어는 CUED)');
+          if (hasControl && playerState === window.YT.PlayerState.CUED && pauseTimeRef.current === null) {
+            console.log('[주기적 상태 확인] CUED 상태 감지 - 재생 시도');
             try {
               if (typeof youtubePlayerRef.current.playVideo === 'function') {
                 youtubePlayerRef.current.playVideo();
@@ -1051,10 +1127,10 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
             }
           }
           
-          // 서버가 재생 중인데 플레이어가 UNSTARTED 상태면 재생 시도
+          // 플레이어가 UNSTARTED 상태면 재생 시도 (music prop 변경을 재생 트리거로 사용, isPlaying 무관)
           // loadVideoById 후 UNSTARTED 상태에서 재생이 시작되지 않을 수 있음
-          if (isPlaying && playerState === window.YT.PlayerState.UNSTARTED && pauseTimeRef.current === null) {
-            console.log('[주기적 상태 확인] UNSTARTED 상태 감지 - 재생 시도 (서버는 재생 중인데 플레이어는 UNSTARTED)');
+          if (hasControl && playerState === window.YT.PlayerState.UNSTARTED && pauseTimeRef.current === null) {
+            console.log('[주기적 상태 확인] UNSTARTED 상태 감지 - 재생 시도');
             try {
               if (typeof youtubePlayerRef.current.playVideo === 'function') {
                 youtubePlayerRef.current.playVideo();
