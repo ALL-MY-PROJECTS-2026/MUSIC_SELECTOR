@@ -18,6 +18,12 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
   const lastSyncTimeRef = useRef(0); // 마지막 동기화 시간 (5초에 1회 제한)
   const playbackPositionIntervalRef = useRef(null); // 재생 위치 전송 인터벌
   const cleanupTimeoutRef = useRef(null); // cleanup timeout 추적
+  const lastSentPositionRef = useRef(null); // 제어권 있는 클라이언트가 마지막으로 전송한 재생 위치
+  const lastSentTimeRef = useRef(0); // 제어권 있는 클라이언트가 마지막으로 전송한 시간
+  const lastSyncTimeForControlRef = useRef(0); // 제어권 있는 클라이언트의 마지막 동기화 시간 (10초에 1회 제한)
+  const serverPlaybackPositionRef = useRef(null); // 서버 재생 위치 ref (onReady에서 접근용)
+  const previousPositionRef = useRef(null); // 이전 재생 위치 (seek 감지용)
+  const seekCheckIntervalRef = useRef(null); // seek 감지 인터벌
 
   // YouTube IFrame API 로드
   useEffect(() => {
@@ -79,6 +85,45 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
       }, 1000); // 플레이어가 준비될 시간을 주기 위해 약간의 지연
     }
   }, [hasControl, playerReady, music, isPlaying]);
+
+  // 제어권 획득 시 즉시 서버 재생 위치로 동기화
+  useEffect(() => {
+    const wasControlAcquired = !previousHasControlRef.current && hasControl;
+    
+    // 제어권을 새로 획득했고, 재생 중이며, 서버 재생 위치가 있을 때 즉시 동기화
+    if (wasControlAcquired && hasControl && playerReady && youtubePlayerRef.current && isPlaying && 
+        serverPlaybackPosition && music && serverPlaybackPosition.videoId === music.videoId) {
+      try {
+        const myPosition = youtubePlayerRef.current.getCurrentTime();
+        const serverPosition = serverPlaybackPosition.position;
+        
+        // 네트워크 지연 보정
+        const delay = (Date.now() - serverPlaybackPosition.timestamp) / 1000;
+        const adjustedServerPosition = serverPosition + delay;
+        
+        const difference = Math.abs(myPosition - adjustedServerPosition);
+        
+        // 차이가 0.5초 이상이면 동기화 (제어권 획득 시에는 더 엄격하게)
+        if (difference >= 0.5) {
+          console.log('[제어권 획득] 즉시 재생 위치 동기화:', {
+            내위치: myPosition,
+            서버위치: adjustedServerPosition,
+            차이: difference
+          });
+          
+          if (typeof youtubePlayerRef.current.seekTo === 'function') {
+            youtubePlayerRef.current.seekTo(adjustedServerPosition, true);
+            lastSyncTimeForControlRef.current = Date.now();
+            // 동기화 후 전송 위치도 업데이트
+            lastSentPositionRef.current = adjustedServerPosition;
+            lastSentTimeRef.current = Date.now();
+          }
+        }
+      } catch (e) {
+        console.log('[제어권 획득] 재생 위치 동기화 오류:', e);
+      }
+    }
+  }, [hasControl, playerReady, isPlaying, serverPlaybackPosition, music]);
 
   // 제어권이 없을 때 플레이어는 유지하되 재생 제어만 하지 않음
   // 제어권이 없는 클라이언트에서도 플레이어를 생성하여 영상을 표시할 수 있도록 함
@@ -227,9 +272,9 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
             playStartTime: music.playStartTime
           });
           
-          // playStartTime이 있고 제어권이 없거나 로컬 재생 모드이면 현재 재생 위치부터 로드
+          // playStartTime이 있으면 현재 재생 위치 계산 (모든 클라이언트)
           let startSeconds = 0;
-          if (music.playStartTime && (!hasControl || localPlayMode)) {
+          if (music.playStartTime) {
             const playStartTime = new Date(music.playStartTime).getTime();
             const currentTime = Date.now();
             const elapsedSeconds = Math.floor((currentTime - playStartTime) / 1000);
@@ -237,7 +282,8 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
             console.log('[loadVideoById] 현재 재생 위치 계산:', {
               playStartTime: music.playStartTime,
               currentTime: currentTime,
-              elapsedSeconds: startSeconds
+              elapsedSeconds: startSeconds,
+              hasControl
             });
           }
           
@@ -452,9 +498,9 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
       // 제어권이 없고 로컬 재생 모드일 때는 오디오만 재생 (영상 숨김)
       const isAudioOnly = !hasControl && localPlayMode;
       
-      // playStartTime이 있으면 현재 재생 위치 계산 (제어권이 없거나 로컬 재생 모드일 때)
+      // playStartTime이 있으면 현재 재생 위치 계산 (모든 클라이언트)
       let initialStartSeconds = 0;
-      if (music.playStartTime && (!hasControl || localPlayMode)) {
+      if (music.playStartTime) {
         const playStartTime = new Date(music.playStartTime).getTime();
         const currentTime = Date.now();
         const elapsedSeconds = Math.floor((currentTime - playStartTime) / 1000);
@@ -526,17 +572,36 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                   timestamp: playCallTime
                 });
                 
-                // playStartTime이 있으면 현재 재생 위치부터 재생 (제어권이 없는 클라이언트 또는 로컬 재생 모드)
-                // 제어권이 있는 클라이언트는 처음부터 재생 (서버 제어)
-                // 항상 playStartTime을 확인하여 현재 위치 계산 (내 장치로 듣기 모드 포함)
+                // 서버 재생 위치를 우선 사용, 없으면 playStartTime 사용 (모든 클라이언트)
                 let seekPosition = 0;
-                if (music.playStartTime) {
+                let positionSource = 'none';
+                
+                // 서버 재생 위치 확인 (우선 사용)
+                if (serverPlaybackPositionRef.current && 
+                    serverPlaybackPositionRef.current.videoId === music.videoId &&
+                    typeof serverPlaybackPositionRef.current.position === 'number') {
+                  const serverPos = serverPlaybackPositionRef.current;
+                  // 네트워크 지연 보정
+                  const delay = (Date.now() - serverPos.timestamp) / 1000;
+                  seekPosition = serverPos.position + delay;
+                  positionSource = 'server';
+                  
+                  console.log('[onReady] 서버 재생 위치 사용:', {
+                    서버위치: serverPos.position,
+                    지연보정: delay,
+                    최종위치: seekPosition,
+                    hasControl,
+                    localPlayMode
+                  });
+                } else if (music.playStartTime) {
+                  // 서버 재생 위치가 없으면 playStartTime 사용
                   const playStartTime = new Date(music.playStartTime).getTime();
                   const currentTime = Date.now();
                   const elapsedSeconds = Math.floor((currentTime - playStartTime) / 1000);
                   seekPosition = Math.max(0, elapsedSeconds);
+                  positionSource = 'playStartTime';
                   
-                  console.log('[onReady] 현재 재생 위치 계산:', {
+                  console.log('[onReady] playStartTime 사용:', {
                     playStartTime: music.playStartTime,
                     currentTime: currentTime,
                     elapsedSeconds: seekPosition,
@@ -544,6 +609,13 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                     localPlayMode
                   });
                 }
+                
+                console.log('[onReady] 최종 재생 위치 결정:', {
+                  위치: seekPosition,
+                  출처: positionSource,
+                  hasControl,
+                  localPlayMode
+                });
                 
                 // 제어권이 없거나 로컬 재생 모드이면 현재 위치부터 재생
                 if ((!hasControl || localPlayMode) && seekPosition > 0) {
@@ -563,9 +635,36 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                     event.target.playVideo();
                     console.log('[onReady] playVideo() 호출 완료 (seekTo 없음)');
                   }
+                } else if (hasControl && !localPlayMode) {
+                  // 제어권이 있고 로컬 재생 모드가 아니면 현재 위치부터 재생 (서버 재생 위치 동기화)
+                  if (seekPosition > 0) {
+                    // 현재 위치로 이동 후 재생
+                    if (typeof event.target.seekTo === 'function') {
+                      event.target.seekTo(seekPosition, true);
+                      console.log('[onReady] 제어권 있음 - seekTo 호출:', seekPosition, '초');
+                      // seekTo 후 약간의 지연 후 재생
+                      setTimeout(() => {
+                        if (youtubePlayerRef.current && typeof youtubePlayerRef.current.playVideo === 'function') {
+                          youtubePlayerRef.current.playVideo();
+                          console.log('[onReady] 제어권 있음 - 재생 시작 (현재 위치부터):', seekPosition, '초');
+                        }
+                      }, 500); // 충분한 지연
+                    } else {
+                      event.target.playVideo();
+                      console.log('[onReady] 제어권 있음 - playVideo() 호출 완료 (seekTo 없음)');
+                    }
+                  } else {
+                    // 위치가 0이면 처음부터 재생
+                    event.target.playVideo();
+                    console.log('[onReady] 제어권 있음 - playVideo() 호출 완료 (처음부터)', {
+                      videoId: music.videoId,
+                      호출시간: playCallTime,
+                      seekPosition,
+                      playStartTime: music.playStartTime
+                    });
+                  }
                 } else {
-                  // 제어권이 있고 로컬 재생 모드가 아니면 처음부터 재생 (서버 제어)
-                  // 또는 위치가 0이면 처음부터 재생
+                  // 위치가 0이면 처음부터 재생
                   event.target.playVideo();
                   console.log('[onReady] playVideo() 호출 완료', {
                     videoId: music.videoId,
@@ -955,6 +1054,10 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
       previousVideoIdRef.current = music.videoId;
       if (isNewMusic) {
         endedSentRef.current = false;
+        // 새 음악 시작 시 동기화 시간 리셋 (즉시 동기화 가능하도록)
+        lastSyncTimeForControlRef.current = 0;
+        lastSentPositionRef.current = null;
+        lastSentTimeRef.current = 0;
         setIsLiked(false); // 새 음악 재생 시 좋아요 상태 초기화
         setLikeCount(0); // 좋아요 개수 초기화
         
@@ -1451,7 +1554,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
     };
   }, [isPlaying, playerReady, music, hasControl, localPlayMode, localIsPlaying]);
 
-  // 제어권 있는 클라이언트: 재생 위치를 서버에 주기적으로 전송
+  // 제어권 있는 클라이언트: 재생 위치를 서버에 주기적으로 전송 및 seek 감지
   useEffect(() => {
     if (hasControl && playerReady && youtubePlayerRef.current && isPlaying) {
       // 기존 인터벌 정리
@@ -1459,13 +1562,63 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
         clearInterval(playbackPositionIntervalRef.current);
         playbackPositionIntervalRef.current = null;
       }
+      if (seekCheckIntervalRef.current) {
+        clearInterval(seekCheckIntervalRef.current);
+        seekCheckIntervalRef.current = null;
+      }
       
-      // 3초마다 재생 위치 전송
+      // 1단계: seek 감지를 위한 위치 추적 (0.5초마다 확인)
+      seekCheckIntervalRef.current = setInterval(() => {
+        if (youtubePlayerRef.current && window.socket && hasControl && isPlaying) {
+          try {
+            const currentTime = youtubePlayerRef.current.getCurrentTime();
+            if (typeof currentTime === 'number' && currentTime >= 0) {
+              // 이전 위치와 비교하여 seek 감지 (1초 이상 급격한 변화)
+              if (previousPositionRef.current !== null) {
+                const timeDiff = Date.now() - lastSentTimeRef.current;
+                const expectedPosition = lastSentPositionRef.current + (timeDiff / 1000);
+                const actualDiff = Math.abs(currentTime - expectedPosition);
+                
+                // 1초 이상 차이나면 seek로 판단
+                if (actualDiff >= 1.0) {
+                  console.log('[Seek 감지] 즉시 서버로 전송:', {
+                    이전위치: previousPositionRef.current,
+                    현재위치: currentTime,
+                    예상위치: expectedPosition,
+                    차이: actualDiff
+                  });
+                  
+                  // 즉시 서버로 전송 (seek 이벤트)
+                  lastSentPositionRef.current = currentTime;
+                  lastSentTimeRef.current = Date.now();
+                  
+                  window.socket.emit('seekPlaybackPosition', {
+                    position: currentTime,
+                    videoId: music?.videoId,
+                    timestamp: Date.now()
+                  });
+                }
+              }
+              
+              // 이전 위치 업데이트
+              previousPositionRef.current = currentTime;
+            }
+          } catch (e) {
+            console.log('[Seek 감지] 오류:', e);
+          }
+        }
+      }, 500); // 0.5초마다 확인
+      
+      // 2단계: 3초마다 재생 위치 전송 (정기 업데이트)
       playbackPositionIntervalRef.current = setInterval(() => {
         if (youtubePlayerRef.current && window.socket && hasControl && isPlaying) {
           try {
             const currentTime = youtubePlayerRef.current.getCurrentTime();
             if (typeof currentTime === 'number' && currentTime >= 0) {
+              // 자신이 전송한 위치 추적
+              lastSentPositionRef.current = currentTime;
+              lastSentTimeRef.current = Date.now();
+              
               window.socket.emit('updatePlaybackPosition', {
                 position: currentTime,
                 videoId: music?.videoId
@@ -1482,6 +1635,10 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
           clearInterval(playbackPositionIntervalRef.current);
           playbackPositionIntervalRef.current = null;
         }
+        if (seekCheckIntervalRef.current) {
+          clearInterval(seekCheckIntervalRef.current);
+          seekCheckIntervalRef.current = null;
+        }
       };
     } else {
       // 재생 중이 아니거나 제어권이 없으면 인터벌 정리
@@ -1489,6 +1646,11 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
         clearInterval(playbackPositionIntervalRef.current);
         playbackPositionIntervalRef.current = null;
       }
+      if (seekCheckIntervalRef.current) {
+        clearInterval(seekCheckIntervalRef.current);
+        seekCheckIntervalRef.current = null;
+      }
+      previousPositionRef.current = null;
     }
   }, [hasControl, playerReady, isPlaying, music?.videoId]);
 
@@ -1498,20 +1660,182 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
     
     const handlePlaybackPositionUpdate = (data) => {
       if (data && data.videoId && typeof data.position === 'number') {
-        setServerPlaybackPosition({
+        const positionData = {
           videoId: data.videoId,
           position: data.position,
           timestamp: data.timestamp || Date.now()
-        });
+        };
+        setServerPlaybackPosition(positionData);
+        // ref에도 저장 (onReady에서 접근용)
+        serverPlaybackPositionRef.current = positionData;
+      }
+    };
+    
+    // 4단계: seek 이벤트 수신 시 즉시 동기화 (주기 제한 없이)
+    const handlePlaybackPositionSeek = (data) => {
+      if (data && data.videoId && typeof data.position === 'number') {
+        const positionData = {
+          videoId: data.videoId,
+          position: data.position,
+          timestamp: data.timestamp || Date.now()
+        };
+        setServerPlaybackPosition(positionData);
+        // ref에도 저장
+        serverPlaybackPositionRef.current = positionData;
+        
+        // '내 장치로 듣기' 모드이고 재생 중이면 즉시 동기화
+        if (localPlayMode && !hasControl && playerReady && youtubePlayerRef.current && localIsPlaying &&
+            music && positionData.videoId === music.videoId) {
+          try {
+            const myPosition = youtubePlayerRef.current.getCurrentTime();
+            const serverPosition = positionData.position;
+            
+            // 네트워크 지연 보정
+            const delay = (Date.now() - positionData.timestamp) / 1000;
+            const adjustedServerPosition = serverPosition + delay;
+            
+            const difference = Math.abs(myPosition - adjustedServerPosition);
+            
+            // seek 이벤트는 차이가 0.5초 이상이면 즉시 동기화 (주기 제한 없이)
+            if (difference >= 0.5) {
+              console.log('[내 장치로 듣기 - Seek 동기화] 즉시 동기화:', {
+                내위치: myPosition,
+                서버위치: adjustedServerPosition,
+                차이: difference
+              });
+              
+              if (typeof youtubePlayerRef.current.seekTo === 'function') {
+                youtubePlayerRef.current.seekTo(adjustedServerPosition, true);
+                lastSyncTimeRef.current = Date.now(); // 동기화 시간 업데이트
+              }
+            }
+          } catch (e) {
+            console.log('[내 장치로 듣기 - Seek 동기화] 오류:', e);
+          }
+        }
       }
     };
     
     window.socket.on('playbackPositionUpdate', handlePlaybackPositionUpdate);
+    window.socket.on('playbackPositionSeek', handlePlaybackPositionSeek);
     
     return () => {
       window.socket.off('playbackPositionUpdate', handlePlaybackPositionUpdate);
+      window.socket.off('playbackPositionSeek', handlePlaybackPositionSeek);
     };
-  }, []);
+  }, [localPlayMode, hasControl, playerReady, localIsPlaying, music]);
+
+  // 제어권 있는 클라이언트: 플레이어 준비 후 서버 재생 위치로 즉시 동기화 (최초 1회)
+  useEffect(() => {
+    if (!hasControl || localPlayMode || !playerReady || !youtubePlayerRef.current || !isPlaying) {
+      return;
+    }
+    
+    if (!serverPlaybackPosition || !music || serverPlaybackPosition.videoId !== music.videoId) {
+      return;
+    }
+    
+    // 플레이어가 준비된 직후 최초 동기화 (제한 없이 실행)
+    // 단, 이미 동기화를 시도한 경우는 스킵 (lastSyncTimeForControlRef가 0이 아닌 경우)
+    if (lastSyncTimeForControlRef.current > 0) {
+      return; // 이미 동기화를 시도했으면 스킵
+    }
+    
+    try {
+      const myPosition = youtubePlayerRef.current.getCurrentTime();
+      const serverPosition = serverPlaybackPosition.position;
+      
+      // 네트워크 지연 보정
+      const delay = (Date.now() - serverPlaybackPosition.timestamp) / 1000;
+      const adjustedServerPosition = serverPosition + delay;
+      
+      const difference = Math.abs(myPosition - adjustedServerPosition);
+      
+      // 차이가 0.5초 이상이면 동기화
+      if (difference >= 0.5) {
+        console.log('[제어권 있음 - 플레이어 준비 후 즉시 동기화]:', {
+          내위치: myPosition,
+          서버위치: adjustedServerPosition,
+          차이: difference
+        });
+        
+        if (typeof youtubePlayerRef.current.seekTo === 'function') {
+          youtubePlayerRef.current.seekTo(adjustedServerPosition, true);
+          lastSyncTimeForControlRef.current = Date.now();
+          // 동기화 후 전송 위치도 업데이트
+          lastSentPositionRef.current = adjustedServerPosition;
+          lastSentTimeRef.current = Date.now();
+        }
+      } else {
+        // 차이가 작아도 동기화 시간 기록 (다음 주기 동기화 방지)
+        lastSyncTimeForControlRef.current = Date.now();
+        lastSentPositionRef.current = myPosition;
+        lastSentTimeRef.current = Date.now();
+      }
+    } catch (e) {
+      console.log('[제어권 있음 - 플레이어 준비 후 동기화] 오류:', e);
+    }
+  }, [hasControl, localPlayMode, playerReady, isPlaying, serverPlaybackPosition, music]);
+
+  // 제어권 있는 클라이언트: 서버 재생 위치와 주기적 동기화
+  useEffect(() => {
+    if (!hasControl || localPlayMode || !playerReady || !youtubePlayerRef.current || !isPlaying) {
+      return;
+    }
+    
+    if (!serverPlaybackPosition || !music || serverPlaybackPosition.videoId !== music.videoId) {
+      return;
+    }
+    
+    // 10초에 1회만 동기화 (너무 자주 호출 방지)
+    const now = Date.now();
+    if (now - lastSyncTimeForControlRef.current < 10000) {
+      return;
+    }
+    
+    try {
+      const myPosition = youtubePlayerRef.current.getCurrentTime();
+      const serverPosition = serverPlaybackPosition.position;
+      
+      // 자신이 전송한 위치와 비교 (0.5초 이하면 스킵)
+      if (lastSentPositionRef.current !== null) {
+        const timeSinceSent = (now - lastSentTimeRef.current) / 1000;
+        const expectedMyPosition = lastSentPositionRef.current + timeSinceSent;
+        const sentPositionDiff = Math.abs(serverPosition - expectedMyPosition);
+        
+        if (sentPositionDiff < 0.5) {
+          // 자신이 전송한 위치와 거의 동일하면 동기화 스킵
+          return;
+        }
+      }
+      
+      // 네트워크 지연 보정
+      const delay = (Date.now() - serverPlaybackPosition.timestamp) / 1000;
+      const adjustedServerPosition = serverPosition + delay;
+      
+      const difference = Math.abs(myPosition - adjustedServerPosition);
+      
+      // 차이가 2초 이상이면 동기화
+      if (difference >= 2) {
+        console.log('[재생 위치 동기화 - 제어권 있음] 동기화 실행:', {
+          내위치: myPosition,
+          서버위치: adjustedServerPosition,
+          차이: difference,
+          전송한위치: lastSentPositionRef.current
+        });
+        
+        if (typeof youtubePlayerRef.current.seekTo === 'function') {
+          youtubePlayerRef.current.seekTo(adjustedServerPosition, true);
+          lastSyncTimeForControlRef.current = now;
+          // 동기화 후 전송 위치도 업데이트
+          lastSentPositionRef.current = adjustedServerPosition;
+          lastSentTimeRef.current = now;
+        }
+      }
+    } catch (e) {
+      console.log('[재생 위치 동기화 - 제어권 있음] 오류:', e);
+    }
+  }, [serverPlaybackPosition, hasControl, localPlayMode, playerReady, isPlaying, music?.videoId]);
 
   // 로컬 재생 모드: 서버 재생 위치와 동기화 (제어권 없는 클라이언트)
   useEffect(() => {

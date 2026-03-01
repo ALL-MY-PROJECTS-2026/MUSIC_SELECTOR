@@ -104,6 +104,20 @@ io.on('connection', (socket) => {
     isAdmin: isAdmin,
     hasControl: hasControl
   });
+  
+  // 재생 중이고 재생 위치가 있으면 새 클라이언트에게 즉시 재생 위치 전송
+  if (isPlaying && currentPlaybackPosition && currentPlaying && 
+      currentPlaybackPosition.videoId === currentPlaying.videoId) {
+    // 네트워크 지연 보정
+    const delay = Date.now() - currentPlaybackPosition.timestamp;
+    const adjustedPosition = currentPlaybackPosition.position + (delay / 1000);
+    
+    socket.emit('playbackPositionUpdate', {
+      videoId: currentPlaybackPosition.videoId,
+      position: adjustedPosition,
+      timestamp: Date.now()
+    });
+  }
 
   // 재연결 시 자동 재생 체크 (제어권 부여 후)
   // 인증 후에만 자동 재생 체크 (현재는 제어권이 없으므로 스킵)
@@ -379,6 +393,31 @@ io.on('connection', (socket) => {
       };
       // 로그는 너무 자주 출력되므로 주석 처리
       // console.log('[updatePlaybackPosition] 재생 위치 업데이트:', currentPlaybackPosition);
+    }
+  });
+
+  // 재생 위치 seek 이벤트 (제어권 있는 클라이언트에서만 수신, 즉시 브로드캐스트)
+  socket.on('seekPlaybackPosition', (data) => {
+    const clientInfo = connectedClients.get(socket.id);
+    // 제어권이 있는 클라이언트만 수신
+    if (clientInfo && controlSessionId === socket.id && data && typeof data.position === 'number') {
+      currentPlaybackPosition = {
+        videoId: currentPlaying?.videoId,
+        position: data.position,
+        timestamp: data.timestamp || Date.now()
+      };
+      
+      console.log('[seekPlaybackPosition] Seek 감지 - 즉시 브로드캐스트:', currentPlaybackPosition);
+      
+      // 3단계: 즉시 모든 클라이언트에게 브로드캐스트
+      const delay = Date.now() - currentPlaybackPosition.timestamp;
+      const adjustedPosition = currentPlaybackPosition.position + (delay / 1000);
+      
+      io.emit('playbackPositionSeek', {
+        videoId: currentPlaybackPosition.videoId,
+        position: adjustedPosition,
+        timestamp: Date.now()
+      });
     }
   });
 
