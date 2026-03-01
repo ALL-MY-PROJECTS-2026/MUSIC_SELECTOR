@@ -1,0 +1,151 @@
+.liked-music-list {
+  background: var(--bg-secondary);
+  padding: 25px;
+  border: 1px solid var(--border-color);
+  margin-bottom: 20px;
+  transition: background-color 0.3s, border-color 0.3s;
+}
+
+.liked-music-list h2 {
+  color: var(--text-primary);
+  margin-bottom: 20px;
+  font-size: 1.5rem;
+}
+
+.liked-music-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+  gap: 10px;
+}
+
+.liked-music-header h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toggle-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  min-width: 32px;
+}
+
+.toggle-btn:hover {
+  color: var(--text-secondary);
+}
+
+.toggle-btn .material-icons {
+  font-size: 1.5rem;
+}
+
+.empty-liked {
+  text-align: center;
+  padding: 40px;
+  color: var(--text-secondary);
+}
+
+.liked-music-items {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.liked-music-item {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  transition: background-color 0.3s, border-color 0.3s;
+}
+
+.liked-music-number {
+  min-width: 30px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.liked-music-info {
+  flex: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.liked-music-info h4 {
+  color: var(--text-primary);
+  font-size: 1rem;
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.liked-music-count {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #ff6b6b;
+  font-weight: 600;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.liked-music-count .material-icons {
+  font-size: 1rem;
+}
+
+/* 모바일 반응형 */
+@media (max-width: 968px) {
+  .liked-music-list {
+    padding: 20px;
+  }
+
+  .liked-music-list h2 {
+    font-size: 1.3rem;
+  }
+
+  .liked-music-info h4 {
+    font-size: 0.95rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .liked-music-list {
+    padding: 15px;
+  }
+
+  .liked-music-list h2 {
+    font-size: 1.2rem;
+    margin-bottom: 15px;
+  }
+
+  .liked-music-info h4 {
+    font-size: 0.9rem;
+  }
+}

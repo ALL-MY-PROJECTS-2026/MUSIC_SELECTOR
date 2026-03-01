@@ -35,6 +35,54 @@
   display: block;
 }
 
+.like-icon {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ff6b6b;
+  font-size: 1.5rem;
+  z-index: 2;
+  cursor: pointer;
+  transition: transform 0.2s, color 0.2s;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  backdrop-filter: blur(4px);
+}
+
+.like-icon:hover {
+  transform: scale(1.1);
+  color: #ff5252;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.like-icon .material-icons {
+  font-size: 1.5rem;
+}
+
+.like-count-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  background: #ff6b6b;
+  color: white;
+  font-size: 0.7rem;
+  font-weight: 600;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border: 2px solid rgba(0, 0, 0, 0.3);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
 .playing-indicator {
   position: absolute;
   top: 10px;
@@ -65,6 +113,26 @@
   overflow: hidden;
   margin-bottom: 15px;
   position: relative;
+}
+
+.player-container.hidden {
+  display: none;
+}
+
+.player-container.audio-only {
+  height: 1px;
+  overflow: hidden;
+  margin-bottom: 0;
+}
+
+.player-container.audio-only iframe {
+  position: absolute;
+  top: -9999px;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .player-container iframe {
@@ -189,98 +257,88 @@
   background: var(--bg-secondary);
 }
 
-/* 태블릿 및 작은 화면 */
-@media (max-width: 768px) {
+.play-mode-toggle {
+  margin-bottom: 15px;
+}
+
+.toggle-btn {
+  width: 100%;
+  padding: 12px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 2px solid var(--border-color);
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+  border-radius: 4px;
+}
+
+.toggle-btn:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--text-primary);
+}
+
+.toggle-btn.local-mode {
+  background: #4aff4a;
+  color: #1a1a1a;
+  border-color: #4aff4a;
+}
+
+.toggle-btn.local-mode:hover {
+  background: #3aff3a;
+}
+
+.toggle-btn.server-mode {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+/* 모바일 반응형 스타일 */
+@media (max-width: 968px) {
   .current-playing {
     padding: 20px;
   }
-  
+
   .current-playing h2 {
     font-size: 1.3rem;
-    margin-bottom: 15px;
   }
-  
+
   .music-info h3 {
     font-size: 1.1rem;
   }
-  
-  .requested-by {
-    font-size: 0.85rem;
-  }
-  
+
   .control-buttons {
     flex-direction: column;
     gap: 8px;
   }
-  
-  .control-btn {
-    width: 100%;
-  }
-  
+
+  .control-btn,
   .next-btn {
+    width: 100%;
     padding: 10px;
-    font-size: 0.9rem;
+    font-size: 0.95rem;
   }
 }
 
-/* 모바일 화면 */
 @media (max-width: 480px) {
   .current-playing {
     padding: 15px;
   }
-  
+
   .current-playing h2 {
-    font-size: 1.1rem;
-    margin-bottom: 12px;
+    font-size: 1.2rem;
+    margin-bottom: 15px;
   }
-  
-  .no-music {
-    padding: 30px 20px;
-    font-size: 0.9rem;
-  }
-  
-  .music-card {
-    gap: 12px;
-  }
-  
-  .playing-indicator {
-    top: 8px;
-    right: 8px;
-    padding: 4px 12px;
-    font-size: 0.75rem;
-  }
-  
+
   .music-info h3 {
     font-size: 1rem;
-    margin-bottom: 6px;
   }
-  
-  .requested-by {
-    font-size: 0.8rem;
-    margin-bottom: 12px;
-  }
-  
-  .player-placeholder {
-    padding: 30px 15px;
-  }
-  
-  .player-placeholder p {
-    font-size: 0.85rem;
-  }
-  
-  .control-buttons {
-    gap: 6px;
-    margin-bottom: 8px;
-  }
-  
-  .control-btn {
-    padding: 10px;
-    font-size: 0.9rem;
-  }
-  
+
+  .control-btn,
   .next-btn {
     padding: 10px;
     font-size: 0.9rem;
   }
 }
-

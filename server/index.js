@@ -37,6 +37,9 @@ const connectedClients = new Map(); // socketId -> clientInfo
 // 제어권 관리 (하나의 세션만 제어권 보유)
 let controlSessionId = null; // 제어권을 가진 세션 ID
 
+// 좋아요 데이터 저장소
+const musicLikes = new Map(); // videoId -> { title, count, likedSessions: Set }
+
 // 관리자 패스워드 (환경 변수 또는 기본값)
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
 
@@ -629,6 +632,110 @@ io.on('connection', (socket) => {
       console.log(`일괄 해제 요청 거부 (권한 없음)`);
       socket.emit('error', { message: '제어권이 없습니다. 제어권을 가진 세션에서만 일괄 해제가 가능합니다.' });
     }
+  });
+
+  // 좋아요 이벤트 수신
+  socket.on('likeMusic', (data) => {
+    const { videoId, title, socketId } = data;
+    
+    if (!videoId || !title) {
+      socket.emit('error', { message: '좋아요 요청에 필요한 정보가 없습니다.' });
+      return;
+    }
+    
+    // 좋아요 데이터 초기화 (없으면 생성)
+    if (!musicLikes.has(videoId)) {
+      musicLikes.set(videoId, {
+        title: title,
+        count: 0,
+        likedSessions: new Set()
+      });
+    }
+    
+    const likeData = musicLikes.get(videoId);
+    
+    // 이미 좋아요를 눌렀는지 확인
+    if (likeData.likedSessions.has(socketId)) {
+      socket.emit('error', { message: '이미 좋아요를 눌렀습니다.' });
+      return;
+    }
+    
+    // 좋아요 추가
+    likeData.likedSessions.add(socketId);
+    likeData.count = likeData.likedSessions.size;
+    
+    console.log(`[likeMusic] 좋아요 추가: ${title} (videoId: ${videoId}, count: ${likeData.count})`);
+    
+    // 모든 클라이언트에 좋아요 업데이트 브로드캐스트
+    io.emit('likeUpdated', {
+      videoId: videoId,
+      title: title,
+      count: likeData.count
+    });
+  });
+  
+  // 좋아요 취소 이벤트 수신
+  socket.on('unlikeMusic', (data) => {
+    const { videoId, title, socketId } = data;
+    
+    if (!videoId) {
+      socket.emit('error', { message: '좋아요 취소 요청에 필요한 정보가 없습니다.' });
+      return;
+    }
+    
+    const likeData = musicLikes.get(videoId);
+    
+    if (!likeData || !likeData.likedSessions.has(socketId)) {
+      socket.emit('error', { message: '좋아요를 누르지 않은 노래입니다.' });
+      return;
+    }
+    
+    // 좋아요 제거
+    likeData.likedSessions.delete(socketId);
+    likeData.count = likeData.likedSessions.size;
+    
+    console.log(`[unlikeMusic] 좋아요 취소: ${title || videoId} (videoId: ${videoId}, count: ${likeData.count})`);
+    
+    // 모든 클라이언트에 좋아요 업데이트 브로드캐스트
+    io.emit('likeUpdated', {
+      videoId: videoId,
+      title: title || likeData.title,
+      count: likeData.count
+    });
+  });
+  
+  // 좋아요 개수 조회
+  socket.on('getLikeCount', (videoId) => {
+    if (!videoId) {
+      socket.emit('error', { message: 'videoId가 필요합니다.' });
+      return;
+    }
+    
+    const likeData = musicLikes.get(videoId);
+    const count = likeData ? likeData.count : 0;
+    
+    socket.emit('likeCount', {
+      videoId: videoId,
+      count: count
+    });
+  });
+  
+  // 세션별 좋아요 여부 확인
+  socket.on('checkLiked', (videoId) => {
+    if (!videoId) {
+      socket.emit('error', { message: 'videoId가 필요합니다.' });
+      return;
+    }
+    
+    const likeData = musicLikes.get(videoId);
+    const isLiked = likeData ? likeData.likedSessions.has(socket.id) : false;
+    const count = likeData ? likeData.count : 0;
+    
+    socket.emit('likedStatus', {
+      videoId: videoId,
+      isLiked: isLiked,
+      count: count
+    });
   });
 
   // 연결 해제

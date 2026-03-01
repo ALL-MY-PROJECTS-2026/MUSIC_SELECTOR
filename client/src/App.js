@@ -5,6 +5,8 @@ import MusicRequestForm from './components/MusicRequestForm';
 import CurrentPlaying from './components/CurrentPlaying';
 import QueueList from './components/QueueList';
 import ClientList from './components/ClientList';
+import LikedMusicList from './components/LikedMusicList';
+import PlaylistModal from './components/PlaylistModal';
 
 // 서버 주소 설정 (환경 변수 또는 현재 호스트 기반)
 const getServerUrl = () => {
@@ -45,12 +47,14 @@ function App() {
   const [hasControl, setHasControl] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authPassword, setAuthPassword] = useState('');
+  const [showPlaylistModal, setShowPlaylistModal] = useState(false);
   const authSuccessRef = useRef(false); // 인증 성공 중복 알림 방지
   const [isDarkMode, setIsDarkMode] = useState(() => {
     // localStorage에서 테마 설정 불러오기 (기본값: 다크모드)
     const savedTheme = localStorage.getItem('theme');
     return savedTheme ? savedTheme === 'dark' : true;
   });
+  const [localPlayMode, setLocalPlayMode] = useState(false); // 내 장치로 듣기 모드
 
   // 테마 변경 시 localStorage에 저장 및 body 클래스 업데이트
   useEffect(() => {
@@ -65,6 +69,10 @@ function App() {
 
   const toggleTheme = () => {
     setIsDarkMode(prev => !prev);
+  };
+
+  const toggleLocalPlayMode = () => {
+    setLocalPlayMode(prev => !prev);
   };
 
   useEffect(() => {
@@ -196,6 +204,56 @@ function App() {
       setIsPlaying(true);
     });
 
+    // 좋아요 업데이트 수신
+    socket.on('likeUpdated', (data) => {
+      const { videoId, title, count } = data;
+      
+      // localStorage 업데이트
+      try {
+        const stored = localStorage.getItem('musicLikes');
+        const likesData = stored ? JSON.parse(stored) : { likesByVideoId: {} };
+        
+        if (!likesData.likesByVideoId[videoId]) {
+          likesData.likesByVideoId[videoId] = { count: 0, likedSessions: [], title: '' };
+        }
+        
+        likesData.likesByVideoId[videoId].count = count;
+        if (title) {
+          likesData.likesByVideoId[videoId].title = title;
+        }
+        
+        // 좋아요 개수가 0이면 제거
+        if (count === 0) {
+          delete likesData.likesByVideoId[videoId];
+        }
+        
+        localStorage.setItem('musicLikes', JSON.stringify(likesData));
+        
+        // 현재 재생 중인 음악이면 좋아요 개수 업데이트
+        if (currentPlaying && currentPlaying.videoId === videoId) {
+          setCurrentPlaying(prev => ({
+            ...prev,
+            likeCount: count
+          }));
+        }
+      } catch (e) {
+        console.error('localStorage 업데이트 오류:', e);
+      }
+    });
+    
+    // 좋아요 개수 수신
+    socket.on('likeCount', (data) => {
+      const { videoId, count } = data;
+      
+      // 현재 재생 중인 음악이면 좋아요 개수 업데이트
+      if (currentPlaying && currentPlaying.videoId === videoId) {
+        setCurrentPlaying(prev => ({
+          ...prev,
+          likeCount: count
+        }));
+      }
+    });
+
     // 대기열 업데이트
     socket.on('queueUpdated', (updatedQueue) => {
       setQueue(updatedQueue);
@@ -227,6 +285,9 @@ function App() {
       socket.off('musicResumed');
       socket.off('queueUpdated');
       socket.off('musicEndedReceived');
+      socket.off('likeUpdated');
+      socket.off('likeCount');
+      socket.off('likedStatus');
       socket.off('error');
     };
   }, []);
@@ -320,6 +381,24 @@ function App() {
             <div className={`connection-status ${isConnected ? 'connected' : 'disconnected'}`}>
               {isConnected ? '연결됨' : '연결 끊김'}
             </div>
+            {isAdmin && hasControl && (
+              <button 
+                onClick={() => setShowPlaylistModal(true)} 
+                className="playlist-btn"
+                title="플레이리스트 관리"
+              >
+                <span className="material-icons">playlist_play</span>
+              </button>
+            )}
+            <div className="play-mode-toggle-wrapper" title={localPlayMode ? '내 장치로 듣기 (클릭하여 서버 장치로 전환)' : '서버 장치로 듣기 (클릭하여 내 장치로 전환)'}>
+              <button 
+                onClick={toggleLocalPlayMode} 
+                className="play-mode-toggle-btn"
+                data-mode={localPlayMode ? 'local' : 'server'}
+              >
+                <span className="material-icons">{localPlayMode ? 'headphones' : 'speaker'}</span>
+              </button>
+            </div>
             <button 
               onClick={toggleTheme} 
               className="theme-toggle-btn"
@@ -365,6 +444,14 @@ function App() {
           </div>
         )}
 
+        {/* 플레이리스트 모달 */}
+        <PlaylistModal
+          isOpen={showPlaylistModal}
+          onClose={() => setShowPlaylistModal(false)}
+          queue={queue}
+          socket={socket}
+        />
+
         <div className="main-content">
           <div className="left-panel">
             <MusicRequestForm 
@@ -380,10 +467,15 @@ function App() {
               onResume={handleResumeMusic}
               isAdmin={isAdmin}
               hasControl={hasControl}
+              localPlayMode={localPlayMode}
+              setLocalPlayMode={setLocalPlayMode}
             />
           </div>
 
           <div className="right-panel">
+            <LikedMusicList 
+              socket={socket}
+            />
             <QueueList 
               queue={queue} 
               onRemove={handleRemoveFromQueue}
