@@ -151,8 +151,8 @@ io.on('connection', (socket) => {
   // 음악 요청 이벤트 (선택한 음악을 대기열에 추가)
   socket.on('requestMusic', async (data) => {
     try {
-      const { musicData, requestedBy, fromPlaylist, isFirstInPlaylist } = data;
-      console.log(`음악 요청: ${musicData.title} (요청자: ${requestedBy || socket.id}, 플레이리스트: ${fromPlaylist}, 첫번째: ${isFirstInPlaylist})`);
+      const { musicData, requestedBy, fromPlaylist, isFirstInPlaylist, isAIRecommendation } = data;
+      console.log(`음악 요청: ${musicData.title} (요청자: ${requestedBy || socket.id}, 플레이리스트: ${fromPlaylist}, 첫번째: ${isFirstInPlaylist}, AI추천: ${isAIRecommendation || false})`);
 
       // 영상 재생 가능 여부 검증 (재생 시간도 함께 검증)
       const validation = await youtubeService.validateVideo(musicData.videoId, musicData.duration);
@@ -181,7 +181,8 @@ io.on('connection', (socket) => {
         videoId: musicData.videoId,
         requestedBy: requestedBy || socket.id,
         timestamp: Date.now(),
-        duration: musicData.duration || null
+        duration: musicData.duration || null,
+        isAIRecommendation: isAIRecommendation || false // AI 추천 여부 추가
       };
 
       queueManager.addToQueue(musicItem);
@@ -873,6 +874,85 @@ io.on('connection', (socket) => {
   });
 
   // 연결 해제
+  // ============================================
+  // AI 추천 기능을 위한 이벤트 핸들러 (기존 코드와 독립적)
+  // ============================================
+  
+  // 대기열 + 하트 데이터 제공
+  socket.on('getQueueAndLikes', () => {
+    try {
+      const queueData = queueManager.getQueue();
+      const likesData = {};
+      
+      // 각 음악의 좋아요 개수 조회
+      queueData.forEach(music => {
+        const likeData = musicLikes.get(music.videoId);
+        likesData[music.videoId] = likeData ? likeData.count : 0;
+      });
+      
+      socket.emit('queueAndLikes', {
+        queue: queueData,
+        musicLikes: likesData
+      });
+    } catch (error) {
+      console.error('[getQueueAndLikes] 오류:', error);
+      socket.emit('error', { message: '대기열 데이터 조회 실패' });
+    }
+  });
+
+  // YouTube Data API 조회수 가져오기 (선택사항, API 키가 있을 때만 사용)
+  socket.on('getVideoDetails', async (videoIds) => {
+    try {
+      // YouTube Data API 키가 없으면 폴백
+      if (!process.env.YOUTUBE_API_KEY) {
+        socket.emit('videoDetailsError', { 
+          message: 'YouTube Data API 키가 설정되지 않았습니다. 검색 순서 기반 인기도를 사용합니다.' 
+        });
+        return;
+      }
+
+      // googleapis 패키지가 설치되어 있지 않으면 폴백
+      let google;
+      try {
+        google = require('googleapis');
+      } catch (err) {
+        socket.emit('videoDetailsError', { 
+          message: 'googleapis 패키지가 설치되지 않았습니다. 검색 순서 기반 인기도를 사용합니다.' 
+        });
+        return;
+      }
+
+      const youtube = google.youtube('v3');
+      
+      // 배치 처리 (최대 50개)
+      const videoIdsBatch = Array.isArray(videoIds) ? videoIds.slice(0, 50) : [videoIds];
+      
+      const response = await youtube.videos.list({
+        key: process.env.YOUTUBE_API_KEY,
+        part: 'statistics,snippet',
+        id: videoIdsBatch.join(',')
+      });
+      
+      const details = response.data.items.map(item => ({
+        videoId: item.id,
+        viewCount: parseInt(item.statistics.viewCount || 0),
+        publishedAt: item.snippet.publishedAt
+      }));
+      
+      socket.emit('videoDetails', details);
+    } catch (error) {
+      console.error('[getVideoDetails] 오류:', error);
+      // 폴백: 검색 순서 기반 사용
+      socket.emit('videoDetailsError', { 
+        message: 'YouTube Data API 호출 실패. 검색 순서 기반 인기도를 사용합니다.' 
+      });
+    }
+  });
+
+  // ============================================
+  // 기존 이벤트 핸들러 (변경 없음)
+  // ============================================
+
   socket.on('disconnect', () => {
     console.log('클라이언트 연결 해제:', socket.id);
     

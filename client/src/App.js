@@ -685,6 +685,7 @@ function App() {
               onSearchMusic={handleSearchMusic}
               onRequestMusic={handleRequestMusic}
               socket={socket}
+              hasControl={hasControl}
             />
             <CurrentPlaying 
               music={currentPlaying} 

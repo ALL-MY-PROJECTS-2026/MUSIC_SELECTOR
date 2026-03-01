@@ -1,0 +1,1434 @@
+========================================
+AI 추천 검색 기능 구현 시나리오
+(대기열 하트 높은 순 기반 추천)
+========================================
+
+1. 개요
+----------------------------------------
+현재 대기열에 있는 음악들 중 하트(좋아요)가 높은 순으로 정렬하여,
+그 음악들의 특징을 분석하고 유사한 음악을 추천하는 AI 검색 기능
+
+목표:
+- 대기열의 인기 음악 패턴 분석
+- 사용자 선호도 기반 음악 추천
+- 브라우저에서 직접 실행 가능한 ML 모델 활용 (Transformers.js)
+- 실시간 추천 결과 제공 (서버 부하 없음)
+- 오프라인 동작 가능 (모델 캐싱 후)
+
+2. 데이터 수집 및 전처리
+----------------------------------------
+2.1. 대기열 데이터 수집
+    - 현재 대기열(queue)의 모든 음악 정보 수집
+      * videoId
+      * title (제목)
+      * thumbnail (썸네일)
+      * requestedBy (요청자)
+      * 추가된 시간
+    
+2.2. 하트 데이터 수집
+    - musicLikes Map에서 각 음악의 좋아요 개수 조회
+    - 대기열의 각 음악에 대해:
+      * videoId로 좋아요 개수 조회
+      * 좋아요 개수가 0인 음악도 포함 (가중치 낮게)
+    
+2.3. 데이터 정렬
+    - 좋아요 개수 기준 내림차순 정렬
+    - 좋아요 개수가 같으면 추가된 시간 기준 (최신순)
+    - 상위 N개 선택 (예: 상위 5~10개)
+      * 대기열이 적으면 전체 사용
+      * 대기열이 많으면 상위 10개만 사용
+    
+2.4. 특징 추출을 위한 데이터 준비
+    - 선택된 음악들의 제목(title) 수집
+    - YouTube API 또는 추가 메타데이터에서:
+      * 아티스트 이름 추출
+      * 장르 정보 (가능한 경우)
+      * 발행 연도 (가능한 경우)
+      * 재생 시간 (가능한 경우)
+
+3. 머신러닝 모델 선택 및 적용
+----------------------------------------
+3.1. 브라우저 실행 환경 제약사항
+    - 메모리 제한: 브라우저별 다름 (일반적으로 2-4GB)
+    - 네트워크: 모델 다운로드 시간 고려 (초기 1회)
+    - IndexedDB: 모델 캐싱을 위한 저장 공간 필요
+    - WebAssembly: 모델 실행을 위한 WASM 지원 필요
+    - 크로스 브라우저 호환성: Chrome, Firefox, Safari, Edge 지원
+
+3.2. 선택된 모델: Xenova/multilingual-e5-small
+    - 라이브러리: @xenova/transformers (Transformers.js)
+    - 모델: Xenova/multilingual-e5-small
+    - 크기: ~40MB (다운로드, IndexedDB 캐싱)
+    - 속도: 매우 빠름 (~50-100ms/텍스트, 브라우저에서)
+    - 한국어 지원: ⭐⭐⭐⭐⭐ (multilingual 모델)
+    - 특징:
+      * Hugging Face 모델을 브라우저에서 직접 실행
+      * WebAssembly 기반으로 빠른 추론
+      * 오프라인 동작 가능 (모델 캐싱 후)
+      * 서버 부하 없음 (클라이언트에서 실행)
+      * 실시간 처리 가능
+
+3.3. 모델 로딩 전략
+    - 첫 로드 시:
+      * 모델 파일 다운로드 (~40MB)
+      * IndexedDB에 캐싱
+      * 로딩 시간: 약 5-10초 (네트워크 속도에 따라)
+    - 이후 로드:
+      * IndexedDB에서 즉시 로드
+      * 로딩 시간: 약 1-2초
+    - 캐싱 전략:
+      * 전역 변수에 모델 인스턴스 저장
+      * 페이지 새로고침 시 IndexedDB에서 복원
+      * 캐시 만료: 없음 (수동 삭제 전까지 유지)
+    - 로딩 상태 표시:
+      * 첫 로드: "AI 모델 로딩 중... (5-10초 소요)"
+      * 캐시 로드: "AI 모델 준비 중... (1-2초 소요)"
+      * 로드 완료: "AI 추천 준비 완료"
+
+3.4. 하이브리드 추천 접근 (권장)
+    - 1단계: 텍스트 유사도 (제목, 아티스트)
+      * Xenova/multilingual-e5-small로 음악 제목 임베딩
+      * 상위 하트 음악들의 가중 평균 임베딩 계산
+      * 좋아요 개수로 가중치 적용
+    - 2단계: 통계적 필터링
+      * 같은 아티스트 음악 가중치 증가 (+15%)
+      * 인기도 보너스 (+15%)
+    - 3단계: 최종 점수 계산
+      * 텍스트 유사도 점수 (70%)
+      * 아티스트 일치 점수 (15%)
+      * 인기도 보너스 점수 (15%)
+      * 최종 점수로 정렬
+
+3.5. 인기도 확인 방법
+    [방법 1] YouTube Data API 조회수 (1순위, 권장)
+    - YouTube Data API v3 사용
+    - videoId로 조회수(viewCount) 가져오기
+    - 발행 날짜(publishedAt)도 함께 가져오기
+    - 인기도 점수 계산:
+      * 조회수 정규화: log(viewCount + 1) / log(maxViewCount + 1)
+      * 최신도 보너스: 최근 발매일수록 가중치 증가
+      * 최종 인기도 점수 = 조회수 점수 × 0.7 + 최신도 점수 × 0.3
+    - 장점:
+      * 정확한 인기도 반영
+      * 조회수 기반으로 객관적 평가
+    - 단점:
+      * YouTube Data API 키 필요
+      * 추가 API 호출 발생
+      * API 할당량 제한 고려 필요
+    
+    [방법 2] YouTube 검색 결과 순서 (2순위, 폴백)
+    - YouTube 검색 API 결과의 순서를 인기도로 간주
+    - 검색 결과는 기본적으로 인기순으로 정렬됨
+    - 인기도 점수 계산:
+      * 검색 결과 1-3위: 1.0 (최고 인기)
+      * 검색 결과 4-5위: 0.9
+      * 검색 결과 6-10위: 0.7
+      * 검색 결과 11-20위: 0.5
+      * 검색 결과 21위 이후: 0.3
+    - 장점:
+      * 추가 API 호출 불필요
+      * 구현 간단
+      * API 키 불필요
+    - 단점:
+      * 정확도가 상대적으로 낮음
+      * 검색어에 따라 순서가 달라질 수 있음
+    
+    [구현 전략]
+    - 1순위: YouTube Data API 사용 시도
+      * API 키가 있으면 조회수 기반 인기도 사용
+      * videoId로 videos.list API 호출
+      * statistics.viewCount, snippet.publishedAt 사용
+    - 2순위: API 키가 없거나 실패 시
+      * 검색 결과 순서 기반 인기도 사용
+      * 검색 결과의 index를 인기도 점수로 변환
+    - 폴백: 두 방법 모두 실패 시
+      * 인기도 점수 = 0.5 (기본값)
+      * 또는 인기도 보너스 제외
+
+4. 추천 알고리즘 시나리오
+----------------------------------------
+4.1. 입력 데이터 준비
+    Step 1: 대기열에서 하트 높은 순 정렬
+      queue = [
+        { id: "1", videoId: "abc123", title: "노래1", likeCount: 5 },
+        { id: "2", videoId: "def456", title: "노래2", likeCount: 3 },
+        { id: "3", videoId: "ghi789", title: "노래3", likeCount: 2 },
+        ...
+      ]
+      → 상위 5개 선택
+    
+    Step 2: 선택된 음악들의 특징 벡터 생성
+      topSongs = [
+        { title: "노래1", likeCount: 5, embedding: [0.1, 0.2, ...] },
+        { title: "노래2", likeCount: 3, embedding: [0.3, 0.1, ...] },
+        ...
+      ]
+    
+    Step 3: 가중 평균 임베딩 계산
+      weightedEmbedding = Σ(song.embedding * song.likeCount) / Σ(likeCount)
+      → 사용자 선호도 반영된 평균 벡터
+
+4.2. 추천 검색 실행
+    Step 1: 사용자 검색어 입력
+      - 사용자가 "비슷한 노래 추천해줘" 또는 "AI 추천" 버튼 클릭
+      - 검색어가 있으면 검색어도 함께 고려
+    
+    Step 2: YouTube 검색 실행
+      - 가중 평균 임베딩과 유사한 음악 검색
+      - 또는 상위 하트 음악들의 키워드 조합으로 검색
+        예: "노래1 아티스트 OR 노래2 아티스트 OR ..."
+    
+    Step 3: 검색 결과 임베딩 및 유사도 계산
+      searchResults = YouTube API 검색 결과
+      for each result in searchResults:
+        result.embedding = 모델.encode(result.title)
+        result.similarity = cosine_similarity(
+          weightedEmbedding, 
+          result.embedding
+        )
+    
+    Step 4: 인기도 점수 계산
+      [방법 1] YouTube Data API 사용 (1순위)
+        for each result in searchResults:
+          videoDetails = YouTube Data API로 조회수 가져오기
+          viewCount = videoDetails.statistics.viewCount
+          publishedAt = videoDetails.snippet.publishedAt
+          
+          // 조회수 정규화 (로그 스케일)
+          normalizedViewCount = log(viewCount + 1) / log(maxViewCount + 1)
+          
+          // 최신도 계산 (최근 발매일수록 높음)
+          daysSincePublished = (현재날짜 - publishedAt) / (365 * 24 * 60 * 60 * 1000)
+          recencyScore = Math.max(0, 1 - daysSincePublished / 2) // 2년 이내
+          
+          // 인기도 점수
+          popularityScore = normalizedViewCount * 0.7 + recencyScore * 0.3
+      
+      [방법 2] 검색 결과 순서 사용 (2순위, 폴백)
+        for each result in searchResults:
+          index = result의 검색 결과 순위 (0부터 시작)
+          if (index < 3): popularityScore = 1.0
+          else if (index < 5): popularityScore = 0.9
+          else if (index < 10): popularityScore = 0.7
+          else if (index < 20): popularityScore = 0.5
+          else: popularityScore = 0.3
+    
+    Step 5: 최종 점수 계산 및 정렬
+      for each result in searchResults:
+        score = (
+          similarity * 0.7 +           // 텍스트 유사도 (70%)
+          artistMatch * 0.15 +          // 아티스트 일치 (15%)
+          popularityScore * 0.15       // 인기도 보너스 (15%)
+        )
+      → score 기준 내림차순 정렬
+    
+    Step 6: 상위 N개 반환
+    
+      - 상위 10~20개 추천 결과 반환
+      - 이미 대기열에 있는 음악 제외
+      - 중복 제거
+
+5. 브라우저 클라이언트 구조
+----------------------------------------
+5.1. 전체 프로젝트 파일 구조 (기존 + 신규)
+    MUSIC_SELECTOR/
+    ├── client/
+    │   ├── src/
+    │   │   ├── App.js                      # [기존] 메인 앱 컴포넌트
+    │   │   ├── App.css                     # [기존] 앱 스타일
+    │   │   ├── index.js                    # [기존] 진입점
+    │   │   ├── index.css                   # [기존] 전역 스타일
+    │   │   │
+    │   │   ├── components/                 # [기존] 컴포넌트 디렉토리
+    │   │   │   ├── MusicRequestForm.jsx    # [기존] 음악 요청 폼
+    │   │   │   ├── MusicRequestForm.css    # [기존]
+    │   │   │   ├── QueueList.jsx           # [기존] 대기열 리스트
+    │   │   │   ├── QueueList.css           # [기존]
+    │   │   │   ├── CurrentPlaying.jsx      # [기존] 현재 재생 중
+    │   │   │   ├── CurrentPlaying.css     # [기존]
+    │   │   │   ├── ClientList.jsx          # [기존] 클라이언트 목록
+    │   │   │   ├── ClientList.css          # [기존]
+    │   │   │   ├── LikedMusicList.jsx      # [기존] 좋아요 음악 목록
+    │   │   │   ├── LikedMusicList.css      # [기존]
+    │   │   │   ├── PlaylistModal.jsx       # [기존] 플레이리스트 모달
+    │   │   │   ├── PlaylistModal.css       # [기존]
+    │   │   │   │
+    │   │   │   └── ai/                     # [신규] AI 추천 전용 컴포넌트
+    │   │   │       ├── RecommendationButton.jsx    # AI 추천 버튼
+    │   │   │       ├── RecommendationButton.css    # 버튼 스타일
+    │   │   │       ├── RecommendationModal.jsx     # 추천 결과 모달
+    │   │   │       ├── RecommendationModal.css     # 모달 스타일
+    │   │   │       ├── RecommendationList.jsx      # 추천 리스트 아이템
+    │   │   │       └── RecommendationList.css      # 리스트 스타일
+    │   │   │
+    │   │   ├── services/                   # [신규] 서비스 레이어
+    │   │   │   ├── ai/                     # [신규] AI 추천 전용 서비스
+    │   │   │   │   ├── recommendationService.js     # 추천 서비스 (메인)
+    │   │   │   │   ├── modelLoader.js              # 모델 로딩 및 캐싱
+    │   │   │   │   ├── embeddingService.js         # 임베딩 생성
+    │   │   │   │   └── similarityCalculator.js     # 유사도 계산
+    │   │   │   │
+    │   │   │   └── (기존 서비스가 있다면 여기에)
+    │   │   │
+    │   │   └── utils/                      # [신규] 유틸리티
+    │   │       └── ai/                      # [신규] AI 추천 전용 유틸
+    │   │           └── indexedDB.js         # IndexedDB 유틸리티
+    │   │
+    │   └── package.json                    # [수정] @xenova/transformers 추가
+    │
+    ├── server/
+    │   ├── index.js                        # [수정] getQueueAndLikes 이벤트 추가
+    │   ├── package.json                     # [기존]
+    │   │
+    │   └── services/                       # [기존] 서버 서비스
+    │       ├── queueManager.js             # [기존] 대기열 관리
+    │       └── youtubeService.js            # [기존] YouTube 검색
+    │
+    └── package.json                        # [기존] 루트 패키지
+
+5.2. 파일별 상세 설명
+
+    [클라이언트 - 신규 파일]
+    
+    client/src/components/ai/RecommendationButton.jsx
+    - 역할: AI 추천 버튼 컴포넌트
+    - 위치: MusicRequestForm 또는 QueueList에 통합
+    - 의존성: RecommendationService
+    - 기능:
+      * "AI 추천" 버튼 렌더링
+      * 클릭 시 추천 프로세스 시작
+      * 로딩 상태 표시
+    
+    client/src/components/ai/RecommendationButton.css
+    - 역할: RecommendationButton 스타일
+    - 스타일: 버튼 디자인, 로딩 애니메이션
+    
+    client/src/components/ai/RecommendationModal.jsx
+    - 역할: 추천 결과 모달 컴포넌트
+    - 의존성: RecommendationList, socket (대기열 추가)
+    - 기능:
+      * 모달 오버레이
+      * 추천 결과 리스트 표시
+      * 각 항목에 "추가하기" 버튼
+      * 닫기 버튼
+    
+    client/src/components/ai/RecommendationModal.css
+    - 역할: RecommendationModal 스타일
+    - 스타일: 모달 레이아웃, 애니메이션
+    
+    client/src/components/ai/RecommendationList.jsx
+    - 역할: 추천 리스트 아이템 컴포넌트
+    - props: recommendations (추천 결과 배열)
+    - 기능:
+      * 각 추천 항목 렌더링 (썸네일, 제목, 아티스트)
+      * 유사도 점수 표시 (선택사항)
+      * "추가하기" 버튼
+    
+    client/src/components/ai/RecommendationList.css
+    - 역할: RecommendationList 스타일
+    - 스타일: 리스트 아이템 디자인
+    
+    client/src/services/ai/recommendationService.js
+    - 역할: 추천 서비스 메인 로직
+    - 의존성: ModelLoader, EmbeddingService, SimilarityCalculator
+    - 주요 메서드:
+      * getTopLikedSongs(queue, musicLikes, topN)
+      * generateRecommendations(queue, musicLikes, searchQuery?)
+      * calculateFinalScore(...)
+      * filterDuplicates(recommendations, queue)
+    
+    client/src/services/ai/modelLoader.js
+    - 역할: ML 모델 로딩 및 캐싱 관리
+    - 의존성: @xenova/transformers, indexedDB 유틸리티
+    - 주요 메서드:
+      * loadModel() - 모델 로드 (캐시 확인)
+      * getModel() - 모델 인스턴스 반환
+    - 싱글톤 패턴 사용
+    
+    client/src/services/ai/embeddingService.js
+    - 역할: 텍스트 임베딩 생성
+    - 의존성: ModelLoader
+    - 주요 메서드:
+      * generateEmbedding(text) - 단일 텍스트 임베딩
+      * generateEmbeddings(texts) - 배치 임베딩
+    - 임베딩 캐싱 (메모리)
+    
+    client/src/services/ai/similarityCalculator.js
+    - 역할: 유사도 계산 유틸리티
+    - 의존성: 없음 (순수 함수)
+    - 주요 메서드:
+      * cosineSimilarity(vec1, vec2)
+      * calculateWeightedAverage(embeddings, weights)
+      * calculateSimilarityScores(targetEmbedding, candidateEmbeddings)
+    
+    client/src/utils/ai/indexedDB.js
+    - 역할: IndexedDB 유틸리티
+    - 의존성: 없음 (브라우저 API)
+    - 주요 함수:
+      * initDB() - 데이터베이스 초기화
+      * saveModel(modelName, modelData)
+      * loadModel(modelName)
+      * saveCache(key, data, ttl)
+      * getCache(key)
+      * clearExpiredCache()
+
+    [서버 - 수정 파일]
+    
+    server/index.js
+    - 수정 내용:
+      * 'getQueueAndLikes' 이벤트 핸들러 추가
+      * 'searchYouTube' 이벤트 핸들러 추가 (선택사항)
+      * 'getVideoDetails' 이벤트 핸들러 추가 (YouTube Data API, 선택사항)
+    - 기존 코드 영향: 없음 (독립적인 이벤트 추가)
+    - YouTube Data API 사용 시:
+      * googleapis 패키지 설치 필요
+      * API 키 환경 변수 설정 필요
+      * videos.list API 호출 구현
+
+    [패키지 - 수정 파일]
+    
+    client/package.json
+    - 추가 의존성:
+      * "@xenova/transformers": "^2.x.x"
+      * "idb": "^8.x.x" (선택사항, IndexedDB 래퍼)
+    
+    server/package.json (YouTube Data API 사용 시)
+    - 추가 의존성:
+      * "googleapis": "^120.x.x" (YouTube Data API v3 사용 시)
+
+5.3. 모듈화 원칙
+    - AI 추천 기능은 별도 디렉토리(ai/)로 분리
+    - 기존 컴포넌트와 독립적으로 동작
+    - 서비스 레이어는 명확한 책임 분리
+    - 기존 코드 수정 최소화
+    - 필요시에만 기존 컴포넌트에 통합
+
+5.4. 기존 시스템 통합 방법
+
+    [통합 포인트 1] MusicRequestForm.jsx
+    - 위치: client/src/components/MusicRequestForm.jsx
+    - 수정 내용:
+      * RecommendationButton 컴포넌트 import
+      * 버튼 영역에 <RecommendationButton /> 추가
+    - 예시:
+      ```jsx
+      import RecommendationButton from './ai/RecommendationButton';
+      
+      // ... 기존 코드 ...
+      <div className="request-form">
+        {/* 기존 검색 폼 */}
+        <RecommendationButton socket={socket} />
+      </div>
+      ```
+
+    [통합 포인트 2] QueueList.jsx
+    - 위치: client/src/components/QueueList.jsx
+    - 수정 내용 (선택사항):
+      * 상단에 "인기 음악 기반 추천" 버튼 추가 가능
+    - 예시:
+      ```jsx
+      import RecommendationButton from './ai/RecommendationButton';
+      
+      <div className="queue-list">
+        <h2>대기열 ({queue.length})</h2>
+        <RecommendationButton socket={socket} queue={queue} />
+        {/* 기존 큐 리스트 */}
+      </div>
+      ```
+
+    [통합 포인트 3] CurrentPlaying.jsx
+    - 위치: client/src/components/CurrentPlaying.jsx
+    - 수정 내용 (선택사항):
+      * "이 노래와 비슷한 추천" 버튼 추가 가능
+    - 예시:
+      ```jsx
+      import RecommendationButton from './ai/RecommendationButton';
+      
+      {/* 현재 재생 중인 음악 정보 */}
+      <RecommendationButton 
+        socket={socket} 
+        currentMusic={currentPlaying}
+        mode="similar"
+      />
+      ```
+
+    [통합 포인트 4] App.js
+    - 위치: client/src/App.js
+    - 수정 내용:
+      * RecommendationService 인스턴스 생성
+      * 'queueAndLikes' 이벤트 리스너 추가
+      * 추천 상태 관리 (useState)
+      * RecommendationModal 표시/숨김 제어
+    - 예시:
+      ```jsx
+      import { RecommendationService } from './services/ai/recommendationService';
+      import RecommendationModal from './components/ai/RecommendationModal';
+      
+      const [recommendations, setRecommendations] = useState(null);
+      const [showRecommendationModal, setShowRecommendationModal] = useState(false);
+      const recommendationService = new RecommendationService();
+      
+      socket.on('queueAndLikes', async (data) => {
+        // 추천 로직 실행
+      });
+      ```
+
+    [통합 포인트 5] server/index.js
+    - 위치: server/index.js
+    - 수정 내용:
+      * 'getQueueAndLikes' 이벤트 핸들러 추가
+      * 'getVideoDetails' 이벤트 핸들러 추가 (YouTube Data API, 선택사항)
+      * 기존 코드와 독립적으로 추가
+    - 예시:
+      ```javascript
+      // 기존 코드는 그대로 유지
+      
+      // AI 추천을 위한 이벤트 추가
+      socket.on('getQueueAndLikes', () => {
+        const queueData = queueManager.getQueue();
+        const likesData = {};
+        
+        queueData.forEach(music => {
+          const likeData = musicLikes.get(music.videoId);
+          likesData[music.videoId] = likeData ? likeData.count : 0;
+        });
+        
+        socket.emit('queueAndLikes', {
+          queue: queueData,
+          musicLikes: likesData
+        });
+      });
+      
+      // YouTube Data API 조회수 가져오기 (선택사항)
+      socket.on('getVideoDetails', async (videoIds) => {
+        // YouTube Data API v3 사용
+        // statistics.viewCount, snippet.publishedAt 가져오기
+        // 클라이언트에 반환
+      });
+      ```
+
+5.5. 파일 생성 순서 (모듈화 고려)
+    1단계: 유틸리티 파일 생성
+      - client/src/utils/ai/indexedDB.js
+      → 다른 모듈의 기반이 되는 유틸리티
+    
+    2단계: 서비스 레이어 생성 (하위 → 상위)
+      - client/src/services/ai/modelLoader.js
+      - client/src/services/ai/embeddingService.js
+      - client/src/services/ai/similarityCalculator.js
+      - client/src/services/ai/recommendationService.js
+      → 의존성 순서대로 생성
+    
+    3단계: 컴포넌트 생성
+      - client/src/components/ai/RecommendationList.jsx (+ CSS)
+      - client/src/components/ai/RecommendationModal.jsx (+ CSS)
+      - client/src/components/ai/RecommendationButton.jsx (+ CSS)
+      → 하위 컴포넌트부터 생성
+    
+    4단계: 기존 파일 수정 (최소한으로)
+      - client/src/components/MusicRequestForm.jsx (버튼 추가)
+      - client/src/App.js (서비스 통합, 이벤트 리스너)
+      - server/index.js (이벤트 핸들러 추가)
+    
+    5단계: 패키지 설치
+      - client/package.json 수정
+      - npm install 실행
+
+5.6. 파일별 의존성 관계도
+    RecommendationButton
+      ↓
+    RecommendationService
+      ↓
+    ModelLoader → EmbeddingService → SimilarityCalculator
+      ↓              ↓
+    indexedDB    ModelLoader
+    
+    RecommendationModal
+      ↓
+    RecommendationList
+      ↓
+    (추천 결과 데이터)
+    
+    App.js
+      ↓
+    RecommendationService
+      ↓
+    RecommendationModal
+
+5.7. 기존 코드 영향도 분석
+    [영향 없음]
+    - QueueList.jsx (기존 기능 그대로)
+    - CurrentPlaying.jsx (기존 기능 그대로)
+    - MusicRequestForm.jsx (기존 기능 그대로, 버튼만 추가)
+    - server/services/queueManager.js
+    - server/services/youtubeService.js
+    
+    [최소 수정]
+    - App.js: 이벤트 리스너 추가, 상태 관리 추가
+    - server/index.js: 이벤트 핸들러 추가 (독립적)
+    - MusicRequestForm.jsx: 버튼 컴포넌트 import 및 추가
+    
+    [신규 생성]
+    - 모든 ai/ 디렉토리 내 파일들
+    - 완전히 독립적인 모듈
+
+5.8. 테스트 가능성
+    - 각 서비스는 독립적으로 테스트 가능
+    - 컴포넌트는 props로 의존성 주입 가능
+    - 기존 기능과 분리되어 테스트 영향 없음
+
+5.2. 서비스 API
+    - RecommendationService.getRecommendations(queue, musicLikes, searchQuery?)
+      * 입력: 
+        {
+          queue: [...],           // 현재 대기열
+          musicLikes: {...},      // 좋아요 데이터
+          searchQuery?: "..."    // 선택적 검색어
+        }
+      * 출력: Promise<{
+          recommendations: [...], // 추천 음악 리스트
+          topSongs: [...],        // 분석에 사용된 상위 하트 음악
+          reasoning: "...",       // 추천 이유
+          processingTime: 1234   // 처리 시간 (ms)
+        }>
+    
+    - ModelLoader.loadModel()
+      * 모델 로드 (캐시 확인)
+      * 반환: Promise<모델 인스턴스>
+    
+    - EmbeddingService.generateEmbedding(text)
+      * 텍스트를 임베딩 벡터로 변환
+      * 반환: Promise<Float32Array>
+
+5.3. 실행 흐름 (브라우저 기반)
+    [클라이언트 - 브라우저]
+      사용자 "AI 추천" 버튼 클릭
+        ↓
+      서버에서 대기열 + 하트 데이터 요청
+        socket.emit('getQueueAndLikes')
+        ↓
+      서버 응답 수신
+        socket.on('queueAndLikes', (data) => {...})
+        ↓
+      브라우저에서 모델 로드 (캐시 확인)
+        - IndexedDB에서 모델 확인
+        - 없으면 다운로드 후 캐싱
+        ↓
+      상위 하트 음악 선택 (로컬 처리)
+        - 좋아요 개수 기준 정렬
+        - 상위 5~10개 선택
+        ↓
+      임베딩 생성 (브라우저에서)
+        - 각 음악 제목 → 임베딩 벡터
+        - 가중 평균 계산 (좋아요 개수 반영)
+        ↓
+      YouTube 검색 (서버 또는 클라이언트)
+        - 키워드 조합으로 검색
+        - 또는 서버에 검색 요청
+        ↓
+      유사도 계산 (브라우저에서)
+        - 검색 결과 임베딩 생성
+        - 코사인 유사도 계산
+        - 인기도 점수 계산
+          * YouTube Data API로 조회수 가져오기 (1순위)
+          * 또는 검색 결과 순서 기반 (2순위)
+        - 추가 점수 계산 (아티스트, 인기도)
+        ↓
+      정렬 및 필터링 (브라우저에서)
+        - 점수 기준 정렬
+        - 대기열 중복 제거
+        - 상위 10~20개 선택
+        ↓
+      추천 결과 UI 표시
+        - RecommendationModal 컴포넌트에 표시
+        - 사용자가 선택하여 대기열에 추가
+
+6. UI/UX 시나리오
+----------------------------------------
+6.1. 추천 버튼 위치
+    - MusicRequestForm 컴포넌트에 "AI 추천" 버튼 추가
+    - 또는 QueueList 컴포넌트 상단에 "인기 음악 기반 추천" 버튼
+    - CurrentPlaying 컴포넌트에 "이 노래와 비슷한 추천" 버튼
+
+6.2. 추천 요청 시나리오
+    [시나리오 A] 대기열 기반 추천
+    1. 사용자가 "AI 추천" 버튼 클릭
+    2. 로딩 인디케이터 표시
+       - "대기열 데이터 수집 중..."
+    3. 서버에서 대기열 + 하트 데이터 요청
+       - socket.emit('getQueueAndLikes')
+    4. 데이터 수신 후 브라우저에서 처리 시작
+       - "AI 모델 준비 중..." (모델이 없으면 "AI 모델 다운로드 중...")
+    5. 브라우저에서 추천 계산
+       - 상위 하트 음악 선택
+       - 임베딩 생성
+       - 유사도 계산
+       - "추천 결과 생성 중..."
+    6. 추천 결과 모달 또는 리스트 표시
+    7. 사용자가 추천 음악 선택하여 대기열에 추가
+
+    [시나리오 B] 현재 재생 중인 음악 기반 추천
+    1. CurrentPlaying에서 "비슷한 노래 추천" 버튼 클릭
+    2. 현재 재생 중인 음악 + 대기열 상위 하트 음악들 함께 분석
+    3. 추천 결과 표시
+
+6.3. 추천 결과 표시
+    - 추천 음악 리스트 (YouTube 썸네일, 제목, 아티스트)
+    - 각 추천에 "추가하기" 버튼
+    - 추천 이유 표시 (선택):
+      * "이 노래들과 유사합니다: 노래1, 노래2"
+      * "인기 음악 기반 추천"
+    - "더 보기" 버튼으로 추가 추천 로드
+
+7. 성능 최적화
+----------------------------------------
+7.1. 모델 로딩 최적화
+    - IndexedDB에 모델 캐싱
+      * 첫 다운로드 후 영구 저장
+      * 페이지 새로고침 시에도 유지
+      * 수동 삭제 전까지 재사용
+    - 전역 변수에 모델 인스턴스 캐싱
+      * 한 번 로드하면 메모리에 유지
+      * 여러 추천 요청 시 재사용
+    - 백그라운드 로딩
+      * 앱 시작 시 미리 로드 (선택사항)
+      * 사용자가 버튼 클릭 전에 준비
+
+7.2. 캐싱 전략
+    - 모델 캐싱: IndexedDB에 영구 저장
+      * 키: 'ai-model-xenova-multilingual-e5-small'
+      * 크기: ~40MB
+      * 만료: 없음 (수동 삭제)
+    - 추천 결과 캐싱: 메모리 또는 localStorage
+      * 캐시 키: 대기열 해시 (videoId 정렬 후 해시)
+      * TTL: 5분
+      * 크기 제한: 최대 10개 결과 세트
+    - 임베딩 캐싱: 메모리
+      * 같은 제목의 임베딩은 재사용
+      * Map 구조로 관리
+
+7.3. 비동기 처리
+    - 모델 로딩과 데이터 수집을 병렬 처리
+    - 임베딩 생성은 순차 처리 (메모리 절약)
+    - YouTube 검색은 서버에서 처리 (API 제한 고려)
+    - UI 업데이트는 requestAnimationFrame 사용
+
+7.4. 폴백 전략
+    - 모델 로딩 실패 시:
+      * 키워드 기반 검색으로 대체
+      * 상위 하트 음악들의 키워드 조합으로 YouTube 검색
+      * 사용자에게 "AI 모델 로딩 실패, 키워드 기반 검색 사용" 알림
+    - 모델 다운로드 실패 시:
+      * 네트워크 오류 메시지 표시
+      * 재시도 버튼 제공
+    - 추천 결과가 없을 때:
+      * 일반 YouTube 검색 결과 반환
+      * "추천 결과가 없습니다. 일반 검색 결과를 표시합니다." 메시지
+
+8. 데이터 흐름 다이어그램 (브라우저 기반)
+----------------------------------------
+[클라이언트 - 브라우저]
+  사용자 "AI 추천" 클릭
+    ↓
+  서버에 대기열 + 하트 데이터 요청
+    socket.emit('getQueueAndLikes')
+    ↓
+[서버 - server/index.js]
+  대기열 + 하트 데이터 수집
+    ↓
+  'queueAndLikes' 이벤트로 클라이언트에 전송
+    ↓
+[클라이언트 - 브라우저]
+  데이터 수신
+    ↓
+  모델 로드 (IndexedDB 캐시 확인)
+    - 캐시 있음: IndexedDB에서 로드 (1-2초)
+    - 캐시 없음: 다운로드 후 캐싱 (5-10초)
+    ↓
+  상위 하트 음악 선택 (로컬 처리)
+    - 좋아요 개수 기준 정렬
+    - 상위 5~10개 선택
+    ↓
+  임베딩 생성 (브라우저에서)
+    - 각 음악 제목 → 임베딩 벡터 (Xenova 모델 사용)
+    - 가중 평균 계산 (좋아요 개수 반영)
+    ↓
+  YouTube 검색 요청 (서버에)
+    socket.emit('searchYouTube', { keywords: [...] })
+    ↓
+[서버 - server/index.js]
+  YouTube API 검색 실행
+    ↓
+  검색 결과 반환
+    socket.emit('youtubeSearchResults', [...])
+    ↓
+[클라이언트 - 브라우저]
+  검색 결과 수신
+    ↓
+  인기도 점수 계산 (브라우저에서)
+    - 방법 1: YouTube Data API로 조회수 가져오기 (1순위)
+      * 서버에 'getVideoDetails' 요청
+        socket.emit('getVideoDetails', videoIds)
+      * ↓
+      * [서버] YouTube Data API 호출
+      * videos.list API로 조회수, 발행일 가져오기
+      * ↓
+      * [클라이언트] 조회수 + 발행일 기반 점수 계산
+      * 조회수 정규화 + 최신도 보너스
+    - 방법 2: 검색 결과 순서 기반 (2순위, 폴백)
+      * API 키가 없거나 실패 시 사용
+      * 검색 결과 index를 점수로 변환
+      * 1-3위: 1.0, 4-5위: 0.9, 6-10위: 0.7, ...
+    ↓
+  유사도 계산 (브라우저에서)
+    - 각 검색 결과 제목 → 임베딩 벡터
+    - 코사인 유사도 계산 (평균 임베딩과 비교)
+    - 아티스트 일치 점수 계산
+    ↓
+  최종 점수 계산 (브라우저에서)
+    - 유사도(0.7) + 아티스트(0.15) + 인기도(0.15)
+    ↓
+  정렬 및 필터링 (브라우저에서)
+    - 점수 기준 내림차순 정렬
+    - 대기열 중복 제거 (videoId 비교)
+    - 상위 10~20개 선택
+    ↓
+  추천 결과 UI 표시
+    - RecommendationModal 컴포넌트에 표시
+    - 추천 이유, 처리 시간 등 표시
+    ↓
+  사용자가 추천 음악 선택
+    ↓
+  대기열에 추가 요청
+    socket.emit('addToQueue', {...})
+
+9. 구현 단계별 체크리스트
+----------------------------------------
+[Phase 1] 데이터 수집 및 전처리
+  □ 대기열에서 하트 높은 순 정렬 함수 구현
+  □ 상위 N개 선택 로직
+  □ 음악 메타데이터 수집 (제목, 아티스트 등)
+
+[Phase 2] 브라우저 ML 모델 설정
+  □ @xenova/transformers 패키지 설치
+  □ IndexedDB 유틸리티 구현
+  □ 모델 로더 서비스 구현
+  □ 모델 캐싱 전략 구현
+
+[Phase 3] 모델 통합
+  □ ModelLoader 클래스 구현
+    - loadModel() 메서드
+    - IndexedDB 캐싱 로직
+    - 에러 처리 및 재시도
+  □ EmbeddingService 클래스 구현
+    - generateEmbedding(text) 메서드
+    - 배치 임베딩 생성
+  □ SimilarityCalculator 클래스 구현
+    - cosineSimilarity() 메서드
+    - 가중 평균 계산
+
+[Phase 4] 추천 로직 구현
+  □ 가중 평균 임베딩 계산
+  □ YouTube 검색 통합
+  □ 인기도 점수 계산 로직
+    - YouTube Data API 조회수 기반 (1순위)
+    - 검색 결과 순서 기반 (2순위, 폴백)
+  □ 최종 점수 계산 및 정렬 로직
+  □ 중복 제거 및 필터링
+
+[Phase 5] 서버 통합
+  □ 서버에 대기열 + 하트 데이터 제공 이벤트 추가
+    - socket.on('getQueueAndLikes', ...)
+    - socket.emit('queueAndLikes', ...)
+  □ YouTube 검색 이벤트 추가 (선택사항)
+    - socket.on('searchYouTube', ...)
+    - 또는 클라이언트에서 직접 YouTube API 호출
+  □ 에러 처리 및 폴백 로직
+
+[Phase 6] 클라이언트 UI
+  □ "AI 추천" 버튼 추가
+  □ 추천 결과 표시 컴포넌트
+  □ 로딩 상태 표시
+  □ 추천 음악 대기열 추가 기능
+
+[Phase 7] 최적화 및 테스트
+  □ 모델 캐싱 테스트
+  □ 성능 측정 및 최적화
+  □ 다양한 시나리오 테스트
+  □ 에러 케이스 처리
+
+10. 추천 모델 상세 비교
+----------------------------------------
+10.1. Xenova/multilingual-e5-small (선택됨)
+    - 크기: ~40MB (다운로드, IndexedDB 캐싱)
+    - 속도: 매우 빠름 (~50-100ms/텍스트, 브라우저)
+    - 정확도: 높음 (multilingual 모델)
+    - 한국어 지원: ⭐⭐⭐⭐⭐
+    - 브라우저 적합성: ⭐⭐⭐⭐⭐
+    - 구현 난이도: 쉬움
+    - 라이브러리: @xenova/transformers
+
+10.2. Xenova/all-MiniLM-L6-v2 (대안)
+    - 크기: ~25MB
+    - 속도: 매우 빠름 (~30-80ms/텍스트)
+    - 정확도: 중간 (영어 중심)
+    - 한국어 지원: ⭐⭐⭐
+    - 브라우저 적합성: ⭐⭐⭐⭐⭐
+    - 구현 난이도: 쉬움
+
+10.3. TensorFlow.js Universal Sentence Encoder (대안)
+    - 크기: ~1MB (모델만)
+    - 속도: 빠름 (~100-200ms/텍스트)
+    - 정확도: 높음
+    - 한국어 지원: ⭐⭐⭐⭐
+    - 브라우저 적합성: ⭐⭐⭐⭐⭐
+    - 구현 난이도: 중간
+
+10.4. Custom 간단한 키워드 매칭 (폴백)
+    - 크기: 0MB (코드만)
+    - 속도: 매우 빠름 (~10ms)
+    - 정확도: 낮음
+    - 브라우저 적합성: ⭐⭐⭐⭐⭐
+    - 구현 난이도: 매우 쉬움
+    - 폴백용으로 적합
+
+11. 예상 시나리오 예시
+----------------------------------------
+[예시 1] 대기열에 다양한 장르의 인기 음악
+    대기열:
+      - "Shape of You" (하트 8개)
+      - "Blinding Lights" (하트 6개)
+      - "Watermelon Sugar" (하트 5개)
+      - "Levitating" (하트 4개)
+    
+    분석:
+      - 팝 음악 위주
+      - 최근 히트곡들
+      - 비슷한 BPM과 분위기
+    
+    추천:
+      - "Good 4 U" (Olivia Rodrigo)
+      - "Stay" (The Kid LAROI & Justin Bieber)
+      - "Peaches" (Justin Bieber)
+      - "Save Your Tears" (The Weeknd)
+
+[예시 2] 특정 아티스트 집중
+    대기열:
+      - "Dynamite" (BTS, 하트 10개)
+      - "Butter" (BTS, 하트 9개)
+      - "Permission to Dance" (BTS, 하트 7개)
+    
+    분석:
+      - BTS 음악 집중
+      - K-pop 장르
+      - 최근 발매곡들
+    
+    추천:
+      - "Life Goes On" (BTS)
+      - "Boy With Luv" (BTS)
+      - "Spring Day" (BTS)
+      - 다른 K-pop 아티스트 추천도 포함
+
+[예시 3] 대기열이 적을 때
+    대기열:
+      - "Bohemian Rhapsody" (하트 3개)
+      - "Hotel California" (하트 2개)
+    
+    분석:
+      - 클래식 록 위주
+      - 오래된 히트곡들
+    
+    추천:
+      - "Stairway to Heaven" (Led Zeppelin)
+      - "Sweet Child O' Mine" (Guns N' Roses)
+      - "Don't Stop Believin'" (Journey)
+
+12. 주의사항 및 제약사항
+----------------------------------------
+12.1. 브라우저 환경 제약
+    - 초기 모델 다운로드: 첫 사용 시 5~10초 소요 (네트워크 속도에 따라)
+    - 메모리 사용: 모델 로드 시 ~100-200MB 메모리 사용
+    - IndexedDB 용량: 모델 캐싱을 위해 ~40MB 저장 공간 필요
+    - 브라우저 호환성: WebAssembly 지원 필요 (최신 브라우저)
+    - 네트워크: 오프라인 모드에서는 모델 다운로드 불가 (캐시 후 가능)
+
+12.2. 데이터 품질
+    - 대기열이 비어있거나 적을 때 추천 품질 저하
+    - 하트가 없는 음악만 있을 때 추천 어려움
+    - 해결: 최소 데이터 요구사항 설정 (예: 최소 3개 음악, 최소 1개 하트)
+
+12.3. YouTube API 제한
+    - YouTube Data API: 일일 할당량 제한 (기본 10,000 units/일)
+      * videos.list 호출: 1 unit
+      * 인기도 확인을 위한 추가 호출 발생
+      * 해결: 배치 처리, 결과 캐싱
+    - YouTube Search API: 일일 할당량 제한
+      * 검색 결과 품질 의존
+      * 해결: 결과 캐싱, 검색어 최적화
+    - API 키 없을 때: 검색 결과 순서 기반 인기도 사용 (폴백)
+
+12.4. 모델 한계
+    - 한국어 음악 제목 처리 능력
+    - 장르 특화 정보 부족
+    - 해결: 다국어 모델 사용 또는 한국어 특화 모델
+
+13. 향후 개선 방향
+----------------------------------------
+13.1. 고급 기능
+    - 사용자별 개인화 추천 (세션 기반 학습)
+    - 시간대별 추천 (아침/저녁 등)
+    - 분위기 기반 추천 (신나는/잔잔한 등)
+
+13.2. 모델 개선
+    - 음악 특화 임베딩 모델 사용
+    - 오디오 특징 추출 (가능한 경우)
+    - 협업 필터링 고도화
+
+13.3. UX 개선
+    - 추천 이유 설명 강화
+    - 추천 히스토리 저장
+    - 추천 피드백 수집 (좋아요/싫어요)
+
+14. 구체적인 작업 시나리오 (단계별 구현 가이드)
+----------------------------------------
+14.1. Phase 1: 프로젝트 설정 및 패키지 설치
+    작업 내용:
+    1. 클라이언트 디렉토리로 이동
+       cd client
+    
+    2. Transformers.js 패키지 설치
+       npm install @xenova/transformers
+    
+    3. 필요한 유틸리티 패키지 설치 (선택사항)
+       npm install idb  # IndexedDB 래퍼 (선택사항)
+    
+    4. 서비스 디렉토리 생성
+       mkdir -p src/services
+       mkdir -p src/utils
+
+14.2. Phase 2: IndexedDB 유틸리티 구현
+    파일: client/src/utils/indexedDB.js
+    작업 내용:
+    1. IndexedDB 데이터베이스 초기화
+       - DB 이름: 'MusicSelectorAI'
+       - 버전: 1
+       - 스토어: 'models', 'cache'
+    
+    2. 모델 저장 함수 구현
+       - saveModel(modelName, modelData)
+       - 모델을 ArrayBuffer로 변환하여 저장
+    
+    3. 모델 로드 함수 구현
+       - loadModel(modelName)
+       - IndexedDB에서 모델 데이터 읽기
+    
+    4. 캐시 관리 함수 구현
+       - saveCache(key, data, ttl)
+       - getCache(key)
+       - clearExpiredCache()
+
+14.3. Phase 3: 모델 로더 서비스 구현
+    파일: client/src/services/modelLoader.js
+    작업 내용:
+    1. ModelLoader 클래스 생성
+       - 싱글톤 패턴 사용
+       - 전역 모델 인스턴스 저장
+    
+    2. loadModel() 메서드 구현
+       - IndexedDB에서 모델 확인
+       - 없으면 다운로드 및 캐싱
+       - 있으면 IndexedDB에서 로드
+       - Transformers.js pipeline 생성
+       - 전역 변수에 저장
+    
+    3. getModel() 메서드 구현
+       - 이미 로드된 모델 반환
+       - 없으면 loadModel() 호출
+    
+    4. 에러 처리
+       - 네트워크 오류 처리
+       - IndexedDB 오류 처리
+       - 재시도 로직
+
+14.4. Phase 4: 임베딩 서비스 구현
+    파일: client/src/services/embeddingService.js
+    작업 내용:
+    1. EmbeddingService 클래스 생성
+       - 모델 로더 의존성 주입
+    
+    2. generateEmbedding(text) 메서드 구현
+       - 텍스트를 임베딩 벡터로 변환
+       - 모델의 feature-extraction pipeline 사용
+       - pooling: 'mean', normalize: true 옵션 사용
+    
+    3. generateEmbeddings(texts) 메서드 구현
+       - 여러 텍스트를 배치로 처리
+       - Promise.all 사용하여 병렬 처리
+    
+    4. 임베딩 캐싱
+       - 같은 텍스트의 임베딩은 메모리에 캐싱
+       - Map 구조 사용
+
+14.5. Phase 5: 유사도 계산 서비스 구현
+    파일: client/src/services/similarityCalculator.js
+    작업 내용:
+    1. SimilarityCalculator 클래스 생성
+    
+    2. cosineSimilarity(vec1, vec2) 메서드 구현
+       - 두 벡터의 코사인 유사도 계산
+       - 공식: dot(vec1, vec2) / (norm(vec1) * norm(vec2))
+    
+    3. calculateWeightedAverage(embeddings, weights) 메서드 구현
+       - 가중 평균 임베딩 계산
+       - 좋아요 개수를 가중치로 사용
+       - 공식: Σ(embedding * weight) / Σ(weight)
+    
+    4. calculateSimilarityScores(targetEmbedding, candidateEmbeddings) 메서드
+       - 타겟 임베딩과 여러 후보 임베딩의 유사도 계산
+       - 배열로 반환
+
+14.6. Phase 6: 추천 서비스 메인 로직 구현
+    파일: client/src/services/recommendationService.js
+    작업 내용:
+    1. RecommendationService 클래스 생성
+       - ModelLoader, EmbeddingService, SimilarityCalculator 의존성
+    
+    2. getTopLikedSongs(queue, musicLikes, topN) 메서드
+       - 대기열에서 하트 높은 순으로 정렬
+       - 상위 N개 선택
+       - 좋아요 개수가 0인 음악도 포함 (가중치 낮게)
+    
+    3. generateRecommendations(queue, musicLikes, searchQuery?) 메서드
+       - 전체 추천 로직 통합
+       - 단계별 처리:
+         a. 상위 하트 음악 선택
+         b. 각 음악 제목 임베딩 생성
+         c. 가중 평균 임베딩 계산
+         d. YouTube 검색 결과 수집 (서버 또는 클라이언트)
+         e. 검색 결과 임베딩 생성
+         f. 유사도 계산
+         g. 인기도 점수 계산 (YouTube Data API 또는 검색 순서)
+         h. 추가 점수 계산 (아티스트, 인기도)
+         i. 정렬 및 필터링
+         i. 상위 N개 반환
+    
+    4. calculatePopularityScore(videoId, searchIndex) 메서드
+      - 인기도 점수 계산
+      - 방법 1: YouTube Data API로 조회수 가져오기 (1순위)
+        * API 키가 있으면 조회수 기반 계산
+        * 조회수 정규화 + 최신도 보너스
+      - 방법 2: 검색 결과 순서 기반 (2순위, 폴백)
+        * 검색 결과 index를 점수로 변환
+        * 1-3위: 1.0, 4-5위: 0.9, 6-10위: 0.7, 11-20위: 0.5, 이후: 0.3
+    
+    5. calculateFinalScore(similarity, artistMatch, popularityScore) 메서드
+      - 최종 점수 계산
+      - 가중치: similarity(0.7), artistMatch(0.15), popularityScore(0.15)
+    
+    5. filterDuplicates(recommendations, queue) 메서드
+       - 대기열에 이미 있는 음악 제거
+       - videoId 기준으로 비교
+
+14.7. Phase 7: 서버 이벤트 핸들러 추가
+    파일: server/index.js
+    작업 내용:
+    1. 'getQueueAndLikes' 이벤트 핸들러 추가
+       socket.on('getQueueAndLikes', () => {
+         const queueData = queueManager.getQueue();
+         const likesData = {};
+         
+         // 각 음악의 좋아요 개수 조회
+         queueData.forEach(music => {
+           const likeData = musicLikes.get(music.videoId);
+           likesData[music.videoId] = likeData ? likeData.count : 0;
+         });
+         
+         socket.emit('queueAndLikes', {
+           queue: queueData,
+           musicLikes: likesData
+         });
+       });
+    
+    2. YouTube 검색 이벤트 추가 (선택사항)
+      - 클라이언트에서 직접 YouTube API 호출 가능하면 생략
+      - 필요시 서버에서 처리
+    
+    3. YouTube Data API 이벤트 추가 (선택사항, 인기도용)
+      - 'getVideoDetails' 이벤트 핸들러
+      - videoId 배열로 조회수, 발행일 가져오기
+      - API 키가 있을 때만 활성화
+
+14.8. Phase 8: 클라이언트 UI 컴포넌트 구현
+    파일: client/src/components/RecommendationButton.jsx
+    작업 내용:
+    1. "AI 추천" 버튼 컴포넌트 생성
+       - MusicRequestForm 또는 QueueList에 추가
+    
+    2. 클릭 이벤트 핸들러
+       - 서버에 대기열 + 하트 데이터 요청
+       - RecommendationService 호출
+       - 로딩 상태 관리
+    
+    3. 로딩 인디케이터
+       - 모델 로딩 상태 표시
+       - 처리 진행 상황 표시
+    
+    파일: client/src/components/RecommendationModal.jsx
+    작업 내용:
+    1. 추천 결과 모달 컴포넌트 생성
+       - 모달 오버레이
+       - 추천 리스트 표시
+       - 각 항목에 "추가하기" 버튼
+    
+    2. 추천 항목 표시
+       - YouTube 썸네일
+       - 제목, 아티스트
+       - 유사도 점수 (선택사항)
+       - 추천 이유
+    
+    3. 대기열 추가 기능
+       - 선택한 음악을 대기열에 추가
+       - socket.emit('addToQueue', ...)
+
+14.9. Phase 9: App.js 통합
+    파일: client/src/App.js
+    작업 내용:
+    1. RecommendationService 인스턴스 생성
+       - 전역 또는 컴포넌트 레벨에서 관리
+    
+    2. 'queueAndLikes' 이벤트 리스너 추가
+       socket.on('queueAndLikes', async (data) => {
+         const { queue, musicLikes } = data;
+         try {
+           const recommendations = await recommendationService
+             .generateRecommendations(queue, musicLikes);
+           // 추천 결과 표시
+         } catch (error) {
+           // 에러 처리
+         }
+       });
+    
+    3. 추천 상태 관리
+       - useState로 추천 결과 상태 관리
+       - RecommendationModal 표시/숨김 제어
+
+14.10. Phase 10: 에러 처리 및 폴백
+    작업 내용:
+    1. 모델 로딩 실패 시 폴백
+       - 키워드 기반 검색으로 대체
+       - 사용자에게 알림 표시
+    
+    2. 네트워크 오류 처리
+       - 재시도 버튼 제공
+       - 오류 메시지 표시
+    
+    3. 추천 결과 없음 처리
+       - "추천 결과가 없습니다" 메시지
+       - 일반 검색 결과 표시 (선택사항)
+
+14.11. Phase 11: 성능 최적화
+    작업 내용:
+    1. 모델 프리로딩 (선택사항)
+       - 앱 시작 시 백그라운드에서 모델 로드
+       - 사용자가 버튼 클릭 전에 준비
+    
+    2. 임베딩 캐싱 최적화
+       - 같은 제목의 임베딩 재사용
+       - 메모리 사용량 모니터링
+    
+    3. 배치 처리 최적화
+       - 여러 임베딩을 한 번에 처리
+       - Promise.all 사용
+    
+    4. UI 최적화
+       - requestAnimationFrame 사용
+       - 가상 스크롤 (추천 결과가 많을 때)
+
+14.12. Phase 12: 테스트 및 디버깅
+    작업 내용:
+    1. 단위 테스트
+       - 각 서비스 클래스 테스트
+       - 유사도 계산 정확도 확인
+    
+    2. 통합 테스트
+       - 전체 추천 플로우 테스트
+       - 다양한 대기열 구성 테스트
+    
+    3. 성능 테스트
+       - 모델 로딩 시간 측정
+       - 추천 생성 시간 측정
+       - 메모리 사용량 모니터링
+    
+    4. 브라우저 호환성 테스트
+       - Chrome, Firefox, Safari, Edge 테스트
+       - 모바일 브라우저 테스트 (선택사항)
+
+14.13. 구현 순서 요약
+    1단계: 패키지 설치 및 디렉토리 구조 생성
+    2단계: IndexedDB 유틸리티 구현
+    3단계: 모델 로더 구현
+    4단계: 임베딩 서비스 구현
+    5단계: 유사도 계산 서비스 구현
+    6단계: 추천 서비스 메인 로직 구현
+    7단계: 서버 이벤트 핸들러 추가
+    8단계: 클라이언트 UI 컴포넌트 구현
+    9단계: App.js 통합
+    10단계: 에러 처리 및 폴백
+    11단계: 성능 최적화
+    12단계: 테스트 및 디버깅
+
+14.14. 예상 소요 시간
+    - Phase 1-2 (설정): 1-2시간
+    - Phase 3-5 (서비스 구현): 4-6시간
+    - Phase 6 (메인 로직): 3-4시간
+    - Phase 7-8 (서버/UI): 3-4시간
+    - Phase 9-10 (통합/에러처리): 2-3시간
+    - Phase 11-12 (최적화/테스트): 2-3시간
+    총 예상 시간: 15-22시간
+
+15. 제어권과의 관계
+----------------------------------------
+15.1. 제어권 독립성 확인
+    브라우저 기반 AI 추천 기능은 제어권과 완전히 독립적으로 동작합니다.
+    
+    ✅ 제어권이 없는 사용자도 AI 추천 사용 가능
+    ✅ 제어권이 옮겨져도 각 사용자의 브라우저에서 독립적으로 동작
+    ✅ 추천 결과를 대기열에 추가하는 것도 제어권 불필요
+    
+    제어권이 필요한 기능:
+    - 재생 제어 (pause, resume, playNext)
+    - 대기열 관리 (removeFromQueue, reorderQueue)
+    
+    제어권 불필요한 기능:
+    - AI 추천 기능 전체 (브라우저에서 실행)
+    - 대기열에 음악 추가 (requestMusic)
+    - 대기열 데이터 읽기 (getQueueAndLikes)
+
+15.2. 다중 사용자 시나리오
+    [시나리오] 여러 사용자가 동시에 AI 추천 사용
+    1. 사용자 A: 제어권 보유, AI 추천 사용
+       - 브라우저에서 모델 로드 및 추천 계산
+       - 추천 결과를 대기열에 추가
+       - 정상 동작 ✅
+    
+    2. 사용자 B: 제어권 없음, AI 추천 사용
+       - 브라우저에서 모델 로드 및 추천 계산
+       - 추천 결과를 대기열에 추가
+       - 정상 동작 ✅
+    
+    3. 제어권이 사용자 A → 사용자 B로 이동
+       - 사용자 A의 AI 추천 기능: 영향 없음 ✅
+       - 사용자 B의 AI 추천 기능: 영향 없음 ✅
+       - 각 사용자의 브라우저에서 독립적으로 동작
+
+15.3. 구현 시 고려사항
+    - 제어권 체크 불필요: AI 추천 관련 모든 기능은 제어권 체크 없이 구현
+    - 서버 이벤트: 'getQueueAndLikes'는 모든 사용자에게 동일한 데이터 제공
+    - 클라이언트 처리: 모든 AI 추천 로직은 브라우저에서 처리되므로 서버 제약 없음
+    - 인기도 확인: YouTube Data API 키가 있으면 조회수 기반, 없으면 검색 순서 기반
+
+16. 인기도 확인 방법 상세
+----------------------------------------
+16.1. YouTube Data API 조회수 기반 (1순위, 권장)
+    구현 방법:
+    1. YouTube Data API v3 사용
+       - googleapis 라이브러리 설치
+       - API 키 설정 (환경 변수)
+    
+    2. videos.list API 호출
+       - videoId로 조회수, 발행일 가져오기
+       - part: 'statistics,snippet'
+       - fields: 'items(id,statistics(viewCount),snippet(publishedAt))'
+    
+    3. 인기도 점수 계산
+       - 조회수 정규화: log(viewCount + 1) / log(maxViewCount + 1)
+       - 최신도 계산: (현재날짜 - publishedAt) 기반
+       - 최종 점수: 조회수 점수 × 0.7 + 최신도 점수 × 0.3
+    
+    4. 배치 처리
+       - 여러 videoId를 한 번에 조회 (최대 50개)
+       - API 할당량 절약
+    
+    예시 코드 구조:
+    ```javascript
+    // 서버: server/index.js
+    const { google } = require('googleapis');
+    const youtube = google.youtube('v3');
+    
+    socket.on('getVideoDetails', async (videoIds) => {
+      try {
+        const response = await youtube.videos.list({
+          key: process.env.YOUTUBE_API_KEY,
+          part: 'statistics,snippet',
+          id: videoIds.join(',')
+        });
+        
+        const details = response.data.items.map(item => ({
+          videoId: item.id,
+          viewCount: parseInt(item.statistics.viewCount || 0),
+          publishedAt: item.snippet.publishedAt
+        }));
+        
+        socket.emit('videoDetails', details);
+      } catch (error) {
+        // 폴백: 검색 순서 기반 사용
+        socket.emit('videoDetailsError', { message: 'API 오류' });
+      }
+    });
+    ```
+
+16.2. 검색 결과 순서 기반 (2순위, 폴백)
+    구현 방법:
+    1. 검색 결과의 index 활용
+       - YouTube 검색 API는 기본적으로 인기순 정렬
+       - 검색 결과의 순서를 인기도로 간주
+    
+    2. 순서 → 점수 변환
+       - 1-3위: 1.0 (최고 인기)
+       - 4-5위: 0.9
+       - 6-10위: 0.7
+       - 11-20위: 0.5
+       - 21위 이후: 0.3
+    
+    3. 구현
+       - 검색 결과 배열의 index 사용
+       - 별도 API 호출 불필요
+    
+    예시 코드:
+    ```javascript
+    function calculatePopularityByIndex(index) {
+      if (index < 3) return 1.0;
+      if (index < 5) return 0.9;
+      if (index < 10) return 0.7;
+      if (index < 20) return 0.5;
+      return 0.3;
+    }
+    ```
+
+16.3. 최종 점수 계산 (길이 제외)
+    점수 구성:
+    - 텍스트 유사도: 70%
+    - 아티스트 일치: 15%
+    - 인기도 보너스: 15%
+    
+    계산식:
+    ```
+    최종 점수 = (유사도 × 0.7) + (아티스트일치 × 0.15) + (인기도 × 0.15)
+    
+    예시:
+    - 유사도: 0.9
+    - 아티스트 일치: 1.0 (같은 아티스트)
+    - 인기도: 0.8 (조회수 기반 또는 검색 순서)
+    → 최종 점수 = (0.9 × 0.7) + (1.0 × 0.15) + (0.8 × 0.15) = 0.885
+    ```
+
+16.4. 구현 우선순위
+    1. 검색 결과 순서 기반 구현 (간단, 폴백용)
+    2. YouTube Data API 통합 (정확도 향상)
+    3. 두 방법 모두 지원하되, API 키가 있으면 자동으로 조회수 기반 사용
+
+========================================
+시나리오 작성 완료
+- 브라우저 기반 AI 추천 구현 (최종 결정)
+- 제어권과 완전히 독립적으로 동작
+========================================

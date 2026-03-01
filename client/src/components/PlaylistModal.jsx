@@ -5,12 +5,14 @@ function PlaylistModal({ isOpen, onClose, queue, socket, onLoadPlaylist }) {
   const [savedPlaylists, setSavedPlaylists] = useState([]);
   const [selectedPlaylist, setSelectedPlaylist] = useState(null);
   const [likedMusics, setLikedMusics] = useState([]);
+  const [aiRecommendations, setAiRecommendations] = useState([]);
 
-  // 모달이 열릴 때마다 좋아요 목록 로드
+  // 모달이 열릴 때마다 좋아요 목록 및 AI 추천 노래 로드
   useEffect(() => {
     if (isOpen) {
       loadSavedPlaylists();
       loadLikedMusics();
+      loadAIRecommendations();
     }
   }, [isOpen]);
 
@@ -79,6 +81,25 @@ function PlaylistModal({ isOpen, onClose, queue, socket, onLoadPlaylist }) {
     }
   };
 
+  const loadAIRecommendations = () => {
+    try {
+      const stored = localStorage.getItem('aiRecommendations');
+      if (stored) {
+        const recommendations = JSON.parse(stored);
+        // 최신순으로 정렬 (최근 추가된 것부터)
+        const sorted = [...recommendations].sort((a, b) => 
+          new Date(b.addedAt) - new Date(a.addedAt)
+        );
+        setAiRecommendations(sorted);
+      } else {
+        setAiRecommendations([]);
+      }
+    } catch (e) {
+      console.error('AI 추천 데이터 읽기 오류:', e);
+      setAiRecommendations([]);
+    }
+  };
+
   const handleSavePlaylist = () => {
     if (likedMusics.length === 0) {
       alert('저장할 좋아요한 노래가 없습니다.');
@@ -106,6 +127,46 @@ function PlaylistModal({ isOpen, onClose, queue, socket, onLoadPlaylist }) {
       localStorage.setItem('savedPlaylists', JSON.stringify(playlists));
       loadSavedPlaylists();
       alert('플레이리스트가 저장되었습니다.');
+    } catch (e) {
+      console.error('플레이리스트 저장 오류:', e);
+      alert('플레이리스트 저장에 실패했습니다.');
+    }
+  };
+
+  const handleSaveAIRecommendationsPlaylist = () => {
+    if (aiRecommendations.length === 0) {
+      alert('저장할 AI 추천 노래가 없습니다.');
+      return;
+    }
+
+    const playlistName = prompt('플레이리스트 이름을 입력하세요:', `AI 추천노래 ${new Date().toLocaleDateString()}`);
+    
+    if (!playlistName || !playlistName.trim()) {
+      return;
+    }
+
+    // AI 추천 노래를 플레이리스트 형식으로 변환 (count는 0으로 설정)
+    const aiMusics = aiRecommendations.map(music => ({
+      videoId: music.videoId,
+      title: music.title,
+      count: 0 // AI 추천은 하트 개수가 없으므로 0
+    }));
+
+    const newPlaylist = {
+      id: Date.now().toString(),
+      name: playlistName.trim(),
+      musics: aiMusics,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    try {
+      const stored = localStorage.getItem('savedPlaylists');
+      const playlists = stored ? JSON.parse(stored) : [];
+      playlists.push(newPlaylist);
+      localStorage.setItem('savedPlaylists', JSON.stringify(playlists));
+      loadSavedPlaylists();
+      alert('AI 추천 노래 플레이리스트가 저장되었습니다.');
     } catch (e) {
       console.error('플레이리스트 저장 오류:', e);
       alert('플레이리스트 저장에 실패했습니다.');
@@ -225,6 +286,34 @@ function PlaylistModal({ isOpen, onClose, queue, socket, onLoadPlaylist }) {
                       <div className="liked-music-count">
                         <span className="material-icons">favorite</span>
                         <span>{music.count}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="playlist-section">
+            <div className="playlist-section-header">
+              <h3>AI 추천노래 ({aiRecommendations.length}개)</h3>
+              <button className="save-playlist-btn" onClick={handleSaveAIRecommendationsPlaylist}>
+                <span className="material-icons">save</span>
+                저장하기
+              </button>
+            </div>
+            <div className="liked-musics-list">
+              {aiRecommendations.length === 0 ? (
+                <p className="empty-message">AI 추천 노래가 없습니다.</p>
+              ) : (
+                aiRecommendations.map((music, index) => (
+                  <div key={music.videoId} className="liked-music-item">
+                    <div className="liked-music-rank">{index + 1}</div>
+                    <div className="liked-music-info">
+                      <div className="liked-music-title">{music.title}</div>
+                      <div className="liked-music-count">
+                        <span className="material-icons">auto_awesome</span>
+                        <span>AI 추천</span>
                       </div>
                     </div>
                   </div>

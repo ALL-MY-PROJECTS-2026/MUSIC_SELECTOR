@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './MusicRequestForm.css';
+import RecommendationButton from './ai/RecommendationButton';
+import AutoRecommendationButton from './ai/AutoRecommendationButton';
 
-function MusicRequestForm({ onSearchMusic, onRequestMusic, socket }) {
+function MusicRequestForm({ onSearchMusic, onRequestMusic, socket, hasControl = false }) {
   const [query, setQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [searchResults, setSearchResults] = useState([]);
@@ -109,6 +111,12 @@ function MusicRequestForm({ onSearchMusic, onRequestMusic, socket }) {
   return (
     <div className="music-request-form">
       <h2>음악 요청</h2>
+      {socket && (
+        <div style={{ marginBottom: '12px', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+          <RecommendationButton socket={socket} />
+          <AutoRecommendationButton socket={socket} hasControl={hasControl} />
+        </div>
+      )}
       <form onSubmit={handleSubmit}>
         <div className="input-group">
           <input

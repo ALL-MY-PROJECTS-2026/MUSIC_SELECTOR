@@ -72,7 +72,12 @@ function QueueList({ queue, onRemove, onReorder, isAdmin = false, hasControl = f
             </div>
             <div className="queue-info">
               <h4>{music.title}</h4>
-              <p className="queue-requested-by">{music.requestedBy}</p>
+              <div className="queue-meta">
+                {music.isAIRecommendation && (
+                  <span className="queue-ai-badge">AI 추천</span>
+                )}
+                <p className="queue-requested-by">{music.requestedBy}</p>
+              </div>
             </div>
             {isAdmin && hasControl && (
               <button 
