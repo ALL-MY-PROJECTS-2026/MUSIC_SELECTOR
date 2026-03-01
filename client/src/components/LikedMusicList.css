@@ -30,6 +30,57 @@
   white-space: nowrap;
 }
 
+.liked-music-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.liked-music-pagination {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.liked-music-pagination-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s;
+  min-width: 32px;
+  height: 32px;
+}
+
+.liked-music-pagination-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-hover);
+}
+
+.liked-music-pagination-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.liked-music-pagination-btn .material-icons {
+  font-size: 1.2rem;
+}
+
+.liked-music-pagination-info {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-weight: 500;
+  min-width: 50px;
+  text-align: center;
+}
+
 .toggle-btn {
   background: transparent;
   border: none;
@@ -130,6 +181,31 @@
     font-size: 1.3rem;
   }
 
+  .liked-music-header {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .liked-music-header-controls {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .liked-music-pagination {
+    gap: 6px;
+  }
+
+  .liked-music-pagination-btn {
+    min-width: 28px;
+    height: 28px;
+    padding: 4px;
+  }
+
+  .liked-music-pagination-info {
+    font-size: 0.85rem;
+    min-width: 45px;
+  }
+
   .liked-music-info h4 {
     font-size: 0.95rem;
   }
@@ -143,6 +219,22 @@
   .liked-music-list h2 {
     font-size: 1.2rem;
     margin-bottom: 15px;
+  }
+
+  .liked-music-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .liked-music-header-controls {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .liked-music-pagination {
+    width: 100%;
+    justify-content: center;
   }
 
   .liked-music-info h4 {

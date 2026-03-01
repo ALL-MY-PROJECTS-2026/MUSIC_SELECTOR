@@ -375,6 +375,7 @@
   gap: 8px;
 }
 
+.export-playlist-btn,
 .load-playlist-btn,
 .delete-playlist-btn {
   padding: 6px;
@@ -387,6 +388,19 @@
   align-items: center;
   justify-content: center;
   transition: all 0.2s;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+}
+
+.export-playlist-btn {
+  color: #52c41a;
+  border-color: #52c41a;
+}
+
+.export-playlist-btn:hover {
+  background: #52c41a;
+  color: white;
 }
 
 .load-playlist-btn {
@@ -409,6 +423,7 @@
   color: white;
 }
 
+.export-playlist-btn .material-icons,
 .load-playlist-btn .material-icons,
 .delete-playlist-btn .material-icons {
   font-size: 1.2rem;
@@ -680,4 +695,108 @@
 
 .playlist-selector-create-btn .material-icons {
   font-size: 1.1rem;
+}
+
+/* 모달 헤더 스타일 */
+.modal-header-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+}
+
+.modal-header-title .material-icons {
+  font-size: 1.8rem;
+  color: var(--text-primary);
+}
+
+.modal-header-title h2 {
+  margin: 0;
+}
+
+.modal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+}
+
+.modal-action-btn:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--border-hover);
+}
+
+.modal-action-btn.export-btn:hover {
+  background: #4a9eff;
+  border-color: #4a9eff;
+  color: white;
+}
+
+.modal-action-btn.import-btn:hover {
+  background: #52c41a;
+  border-color: #52c41a;
+  color: white;
+}
+
+.modal-action-btn .material-icons {
+  font-size: 1.3rem;
+}
+
+@media (max-width: 768px) {
+  .modal-header-title {
+    gap: 8px;
+  }
+
+  .modal-header-title .material-icons {
+    font-size: 1.5rem;
+  }
+
+  .modal-header-title h2 {
+    font-size: 1.3rem;
+  }
+
+  .modal-action-btn {
+    width: 32px;
+    height: 32px;
+    padding: 6px;
+  }
+
+  .modal-action-btn .material-icons {
+    font-size: 1.2rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .modal-header-title .material-icons {
+    font-size: 1.3rem;
+  }
+
+  .modal-header-title h2 {
+    font-size: 1.1rem;
+  }
+
+  .modal-action-btn {
+    width: 28px;
+    height: 28px;
+    padding: 4px;
+  }
+
+  .modal-action-btn .material-icons {
+    font-size: 1rem;
+  }
 }

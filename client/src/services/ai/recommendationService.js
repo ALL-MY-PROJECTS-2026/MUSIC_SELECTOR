@@ -883,11 +883,12 @@ class RecommendationService {
 
     const title = music.title.toLowerCase();
     
-    // 제외할 키워드 패턴 (라이브, 커버, 리믹스, 뮤직비디오, 공연장, 대회 등)
+    // 제외할 키워드 패턴 (라이브, 커버, 리믹스, 공연장, 대회 등)
+    // 주의: MV는 제외하지 않음 (MV는 실제 재생 가능한 음악임)
     const excludeKeywords = [
-      // 라이브/공연 관련 (강화)
-      'live', 'concert', 'performance', 'stage', 'show', 'tour',
-      '라이브', '공연', '무대', '콘서트', '퍼포먼스',
+      // 라이브/공연 관련 (강화) - 단, 버스킹, 직캠 등은 제외
+      'concert', 'performance', 'stage', 'show', 'tour', 'busking', '직캠', '버스킹',
+      '공연', '무대', '콘서트', '퍼포먼스', '라이브 공연', 'live concert', 'live performance',
       // 공연장/대회 관련 (추가)
       'venue', 'arena', 'stadium', 'hall', 'theater', 'theatre',
       '공연장', '경기장', '체육관', '홀', '극장',
@@ -906,9 +907,9 @@ class RecommendationService {
       // 커버/리믹스 관련
       'cover', 'remix', 'mashup', 'mash-up', 'edit', 'version',
       '커버', '리믹스', '리메이크', '어레인지',
-      // 뮤직비디오/비디오 관련
-      'mv', 'music video', 'official video', 'video', 'visual',
-      '뮤직비디오', '뮤비', '비디오', '영상',
+      // 뮤직비디오/비디오 관련 - 제외하지 않음 (MV는 실제 재생 가능한 음악임)
+      // 'mv', 'music video', 'official video', 'video', 'visual',
+      // '뮤직비디오', '뮤비', '비디오', '영상',
       // 기타 제외 키워드
       'reaction', 'review', 'reaction video', 'reaction video',
       '리액션', '반응', '리뷰',
@@ -1949,8 +1950,19 @@ class RecommendationService {
         // 필터링 후에도 결과가 없으면 필터링 없이 상위 20개 선택 (폴백)
         let recommendations;
         if (filteredRecommendations.length > 0) {
-          recommendations = filteredRecommendations.slice(0, 20);
-          console.log(`[RecommendationService] 기본 장르(발라드) 조회순 추천 결과 (이전 추천 가수명 제외): ${recommendations.length}개`);
+          // 대기열에 있는 노래를 확실히 제거
+          const queueVideoIdsSet = new Set(queue.map(m => m.videoId || m.id).filter(id => id != null));
+          const recommendationsBeforeQueueFilter = filteredRecommendations.slice(0, 20);
+          recommendations = recommendationsBeforeQueueFilter.filter(rec => {
+            const recVideoId = rec.videoId || rec.id;
+            if (!recVideoId) return false;
+            if (queueVideoIdsSet.has(recVideoId)) {
+              console.log(`[RecommendationService] 기본 장르 추천: 대기열에 있는 노래 제외 "${rec.title}" (${recVideoId})`);
+              return false;
+            }
+            return true;
+          });
+          console.log(`[RecommendationService] 기본 장르(발라드) 조회순 추천 결과 (이전 추천 가수명 제외, 대기열 필터링): ${recommendations.length}개 (필터링 전: ${recommendationsBeforeQueueFilter.length}개)`);
           
           // 추천된 가수명 로그 출력 (디버깅용)
           const recommendedArtists = recommendations.map(rec => {
@@ -1960,9 +1972,19 @@ class RecommendationService {
           });
           console.log(`[RecommendationService] ========== 최종 추천된 가수명 목록 (이전 추천 가수명 제외됨) ==========`, recommendedArtists);
         } else {
-          // 필터링 결과가 없으면 필터링 없이 상위 20개 선택
-          recommendations = searchResults.slice(0, 20);
-          console.warn(`[RecommendationService] ⚠️ 이전 추천 가수명 제외 필터링 후 결과가 없어 필터링 없이 추천합니다: ${recommendations.length}개`);
+          // 필터링 결과가 없으면 필터링 없이 상위 20개 선택 (하지만 대기열은 제외)
+          const queueVideoIdsSet = new Set(queue.map(m => m.videoId || m.id).filter(id => id != null));
+          const recommendationsBeforeQueueFilter = searchResults.slice(0, 20);
+          recommendations = recommendationsBeforeQueueFilter.filter(rec => {
+            const recVideoId = rec.videoId || rec.id;
+            if (!recVideoId) return false;
+            if (queueVideoIdsSet.has(recVideoId)) {
+              console.log(`[RecommendationService] 기본 장르 추천 (폴백): 대기열에 있는 노래 제외 "${rec.title}" (${recVideoId})`);
+              return false;
+            }
+            return true;
+          });
+          console.warn(`[RecommendationService] ⚠️ 이전 추천 가수명 제외 필터링 후 결과가 없어 필터링 없이 추천합니다 (대기열 제외): ${recommendations.length}개 (필터링 전: ${recommendationsBeforeQueueFilter.length}개)`);
           
           // 필터링 없이 추천된 가수명 로그 출력 (디버깅용)
           const recommendedArtists = recommendations.map(rec => {
@@ -1973,10 +1995,23 @@ class RecommendationService {
           console.warn(`[RecommendationService] ⚠️ 필터링 없이 추천된 가수명 목록:`, recommendedArtists);
         }
         
-        console.log(`[RecommendationService] 기본 장르(발라드) 조회순 추천 결과: ${recommendations.length}개`);
+        // 최종적으로 대기열에 있는 노래가 있는지 한 번 더 확인
+        const queueVideoIdsSet = new Set(queue.map(m => m.videoId || m.id).filter(id => id != null));
+        const recommendationsBeforeFinalCheck = recommendations;
+        const finalRecommendations = recommendationsBeforeFinalCheck.filter(rec => {
+          const recVideoId = rec.videoId || rec.id;
+          if (!recVideoId) return false;
+          if (queueVideoIdsSet.has(recVideoId)) {
+            console.log(`[RecommendationService] 기본 장르 최종 확인: 대기열에 있는 노래 제외 "${rec.title}" (${recVideoId})`);
+            return false;
+          }
+          return true;
+        });
+        
+        console.log(`[RecommendationService] 기본 장르(발라드) 조회순 추천 결과: ${finalRecommendations.length}개 (최종 확인: ${recommendationsBeforeFinalCheck.length}개 → ${finalRecommendations.length}개)`);
         
         return {
-          recommendations,
+          recommendations: finalRecommendations,
           topSongs: [],
           reasoning: `대기열이 비어있어 기본 장르(발라드)로 조회순 추천했습니다. (${musicRegion === 'domestic' ? '국내' : musicRegion === 'international' ? '해외' : '전체'})`,
           processingTime: Date.now() - startTime,
@@ -2043,8 +2078,8 @@ class RecommendationService {
         
         // 여러 검색 쿼리로 검색 결과 수집 (아티스트 기반 검색 우선)
         allSearchResults = [];
-        // 아티스트 기반 검색 쿼리를 우선적으로 더 많이 사용 (최대 5개)
-        for (const query of searchQueries.slice(0, 5)) {
+        // 아티스트 기반 검색 쿼리를 우선적으로 더 많이 사용 (최대 8개로 증가)
+        for (const query of searchQueries.slice(0, 8)) {
           try {
             const results = await this.searchYouTube(query, 30);
             allSearchResults.push(...results);
@@ -2155,19 +2190,23 @@ class RecommendationService {
       const singleTrackFilteredCount = beforeSingleTrackCount - singleTrackFiltered.length;
       
       // 필터링 후 결과가 충분하면(5개 이상) 적용, 아니면 완화
-      if (singleTrackFiltered.length >= 5 || beforeSingleTrackCount < 10) {
+      if (singleTrackFiltered.length >= 5 || beforeSingleTrackCount < 15) {
         filteredSearchResults = singleTrackFiltered;
         if (singleTrackFilteredCount > 0) {
           console.log(`[RecommendationService] 단일 곡이 아닌 항목 제외: ${singleTrackFilteredCount}개`);
         }
       } else {
         console.warn(`[RecommendationService] 단일 곡 필터링 후 결과가 부족(${singleTrackFiltered.length}개). 필터링을 완화합니다.`);
-        // 필터링 완화: 기본적인 키워드만 제외
+        // 필터링 완화: 가장 명확한 제외 키워드만 체크 (MV는 제외하지 않음)
         filteredSearchResults = filteredSearchResults.filter(result => {
           if (!result || !result.title) return false;
           const title = result.title.toLowerCase();
-          // 가장 명확한 제외 키워드만 체크
-          const strictExcludeKeywords = ['live', 'concert', 'cover', 'remix', '라이브', '공연', '커버', '리믹스'];
+          // 가장 명확한 제외 키워드만 체크 (모음집, 버스킹, 직캠 등)
+          const strictExcludeKeywords = [
+            'playlist', '모음', 'collection', 'anthology', 'compilation',
+            'busking', '직캠', '버스킹', 'live concert', 'live performance',
+            'cover', 'remix', '커버', '리믹스'
+          ];
           return !strictExcludeKeywords.some(keyword => title.includes(keyword));
         });
         console.log(`[RecommendationService] 완화된 단일 곡 필터링 후 결과: ${filteredSearchResults.length}개`);
@@ -2213,8 +2252,14 @@ class RecommendationService {
               uniqueResultsMap.set(result.videoId, result);
             }
           }
-          searchResults = Array.from(uniqueResultsMap.values()).slice(0, 50); // 원본 검색 결과 사용
-          console.log(`[RecommendationService] 폴백 검색 결과: ${searchResults.length}개`);
+          // 대기열에 있는 노래는 제외
+          const queueVideoIdsSet = new Set(queue.map(m => m.videoId || m.id).filter(id => id != null));
+          const fallbackResults = Array.from(uniqueResultsMap.values()).filter(result => {
+            const recVideoId = result.videoId || result.id;
+            return recVideoId && !queueVideoIdsSet.has(recVideoId);
+          });
+          searchResults = fallbackResults.slice(0, 50); // 원본 검색 결과 사용 (대기열 제외)
+          console.log(`[RecommendationService] 폴백 검색 결과: ${searchResults.length}개 (대기열 제외 후)`);
         } else {
           console.error('[RecommendationService] 원본 검색 결과도 없습니다.');
           return {
@@ -2538,22 +2583,38 @@ class RecommendationService {
         }
       }
 
-      // 12. 상위 20개 선택
-      const recommendations = finalRecommendations.slice(0, 20);
+      // 12. 상위 20개 선택 및 대기열에 있는 노래 확실히 제거
+      const queueVideoIdsSet = new Set(queue.map(m => m.videoId || m.id).filter(id => id != null));
+      const recommendationsBeforeQueueFilter = finalRecommendations.slice(0, 20);
+      const recommendations = recommendationsBeforeQueueFilter.filter(rec => {
+        const recVideoId = rec.videoId || rec.id;
+        if (!recVideoId) {
+          console.warn('[RecommendationService] 추천 결과에 videoId가 없음:', rec);
+          return false;
+        }
+        if (queueVideoIdsSet.has(recVideoId)) {
+          console.log(`[RecommendationService] 최종 필터링: 대기열에 있는 노래 제외 "${rec.title}" (${recVideoId})`);
+          return false;
+        }
+        return true;
+      });
       
       // 최종 결과 확인
       if (recommendations.length === 0) {
-        console.error('[RecommendationService] 최종 추천 결과가 없습니다.');
+        console.error('[RecommendationService] 최종 추천 결과가 없습니다. (대기열 필터링 후)');
         console.error('[RecommendationService] 디버그 정보:', {
           topSongsCount: topSongs.length,
           searchResultsCount: searchResults.length,
           scoredResultsCount: scoredResults.length,
           uniqueResultsCount: uniqueResults.length,
           finalRecommendationsCount: finalRecommendations.length,
-          recommendationsCount: recommendations.length
+          recommendationsBeforeQueueFilterCount: recommendationsBeforeQueueFilter.length,
+          recommendationsCount: recommendations.length,
+          queueVideoIds: Array.from(queueVideoIdsSet),
+          recommendationsBeforeQueueFilterVideoIds: recommendationsBeforeQueueFilter.map(r => r.videoId || r.id)
         });
       } else {
-        console.log(`[RecommendationService] 최종 추천 결과: ${recommendations.length}개`);
+        console.log(`[RecommendationService] 최종 추천 결과: ${recommendations.length}개 (대기열 필터링: ${recommendationsBeforeQueueFilter.length}개 → ${recommendations.length}개)`);
         // 디버깅: 추천 결과의 videoId와 제목 출력
         console.log('[RecommendationService] 추천 결과 상세:', recommendations.map(r => ({
           videoId: r.videoId,

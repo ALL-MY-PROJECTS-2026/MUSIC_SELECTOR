@@ -107,14 +107,59 @@ const AutoRecommendationButton = ({ socket, hasControl = false }) => {
 
       if (result.recommendations && result.recommendations.length > 0) {
         // 대기열에 없는 첫 번째 추천 음악 찾기
-        const queueVideoIds = new Set(queueData.map(m => m.videoId));
+        // queueData의 각 항목에서 videoId 추출 (id 또는 videoId 필드 확인)
+        const queueVideoIds = new Set(
+          queueData
+            .map(m => m.videoId || m.id) // videoId가 없으면 id 사용
+            .filter(id => id != null && id !== undefined) // null/undefined 제거
+        );
+        
+        console.log('[AutoRecommendation] 대기열 데이터 확인:', {
+          queueLength: queueData.length,
+          queueVideoIdsCount: queueVideoIds.size,
+          queueVideoIds: Array.from(queueVideoIds),
+          queueDataSample: queueData.slice(0, 3).map(m => ({ 
+            id: m.id, 
+            videoId: m.videoId, 
+            title: m.title 
+          }))
+        });
+        
         let recommendedMusic = null;
+        const recommendationVideoIds = result.recommendations.map(r => r.videoId || r.id).filter(id => id != null);
+        
+        console.log('[AutoRecommendation] 추천 결과 확인:', {
+          recommendationsCount: result.recommendations.length,
+          recommendationVideoIds: recommendationVideoIds,
+          recommendationSample: result.recommendations.slice(0, 3).map(r => ({
+            id: r.id,
+            videoId: r.videoId,
+            title: r.title
+          }))
+        });
 
         // 추천 결과에서 대기열에 없는 첫 번째 노래 찾기
         for (const rec of result.recommendations) {
-          if (!queueVideoIds.has(rec.videoId)) {
+          const recVideoId = rec.videoId || rec.id;
+          if (!recVideoId) {
+            console.warn('[AutoRecommendation] 추천 결과에 videoId가 없음:', rec);
+            continue;
+          }
+          
+          if (!queueVideoIds.has(recVideoId)) {
             recommendedMusic = rec;
+            console.log('[AutoRecommendation] 대기열에 없는 추천 음악 찾음:', {
+              videoId: recVideoId,
+              title: rec.title,
+              queueVideoIds: Array.from(queueVideoIds),
+              isInQueue: queueVideoIds.has(recVideoId)
+            });
             break;
+          } else {
+            console.log('[AutoRecommendation] 추천 음악이 대기열에 있음:', {
+              videoId: recVideoId,
+              title: rec.title
+            });
           }
         }
 
@@ -122,7 +167,13 @@ const AutoRecommendationButton = ({ socket, hasControl = false }) => {
         if (!recommendedMusic) {
           console.log('[AutoRecommendation] 모든 추천 결과가 대기열에 있어 건너뜁니다.');
           console.log('[AutoRecommendation] 대기열 videoIds:', Array.from(queueVideoIds));
-          console.log('[AutoRecommendation] 추천 결과 videoIds:', result.recommendations.map(r => r.videoId));
+          console.log('[AutoRecommendation] 추천 결과 videoIds:', recommendationVideoIds);
+          console.log('[AutoRecommendation] 비교 결과:', {
+            queueVideoIds: Array.from(queueVideoIds),
+            recommendationVideoIds: recommendationVideoIds,
+            intersection: recommendationVideoIds.filter(id => queueVideoIds.has(id)),
+            difference: recommendationVideoIds.filter(id => !queueVideoIds.has(id))
+          });
           setError('모든 추천 결과가 이미 대기열에 있습니다.');
           return;
         }

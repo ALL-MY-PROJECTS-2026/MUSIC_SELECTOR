@@ -364,6 +364,182 @@ function PlaylistModal({ isOpen, onClose, queue, socket, onLoadPlaylist, hasCont
     }
   };
 
+  // 개별 플레이리스트를 txt 파일로 저장
+  const handleExportPlaylistToTxt = (playlist, e) => {
+    e.stopPropagation();
+    try {
+      if (!playlist || !playlist.musics || playlist.musics.length === 0) {
+        alert('저장할 곡이 없는 플레이리스트입니다.');
+        return;
+      }
+
+      let txtContent = `=== ${playlist.name} ===\n\n`;
+      txtContent += `생성일: ${new Date(playlist.createdAt).toLocaleString()}\n`;
+      txtContent += `수정일: ${new Date(playlist.updatedAt).toLocaleString()}\n`;
+      txtContent += `곡 수: ${playlist.musics.length}개\n`;
+      txtContent += '\n--- 곡 목록 ---\n';
+      
+      playlist.musics.forEach((music, musicIndex) => {
+        txtContent += `${musicIndex + 1}. ${music.title}\n`;
+        if (music.count > 0) {
+          txtContent += `   좋아요: ${music.count}개\n`;
+        }
+      });
+
+      // 파일명에서 특수문자 제거
+      const sanitizedFileName = playlist.name.replace(/[<>:"/\\|?*]/g, '_');
+      
+      // Blob 생성 및 다운로드
+      const blob = new Blob([txtContent], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${sanitizedFileName}.txt`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('플레이리스트 내보내기 오류:', e);
+      alert('플레이리스트 내보내기에 실패했습니다.');
+    }
+  };
+
+  // 모든 플레이리스트를 개별 txt 파일로 저장
+  const handleExportAllToTxt = () => {
+    try {
+      if (savedPlaylists.length === 0) {
+        alert('저장할 플레이리스트가 없습니다.');
+        return;
+      }
+
+      // 각 플레이리스트를 개별 파일로 저장 (약간의 지연을 두고 순차적으로)
+      savedPlaylists.forEach((playlist, index) => {
+        setTimeout(() => {
+          if (!playlist || !playlist.musics || playlist.musics.length === 0) {
+            return;
+          }
+
+          let txtContent = `=== ${playlist.name} ===\n\n`;
+          txtContent += `생성일: ${new Date(playlist.createdAt).toLocaleString()}\n`;
+          txtContent += `수정일: ${new Date(playlist.updatedAt).toLocaleString()}\n`;
+          txtContent += `곡 수: ${playlist.musics.length}개\n`;
+          txtContent += '\n--- 곡 목록 ---\n';
+          
+          playlist.musics.forEach((music, musicIndex) => {
+            txtContent += `${musicIndex + 1}. ${music.title}\n`;
+            if (music.count > 0) {
+              txtContent += `   좋아요: ${music.count}개\n`;
+            }
+          });
+
+          // 파일명에서 특수문자 제거
+          const sanitizedFileName = playlist.name.replace(/[<>:"/\\|?*]/g, '_');
+          
+          // Blob 생성 및 다운로드
+          const blob = new Blob([txtContent], { type: 'text/plain;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `${sanitizedFileName}.txt`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }, index * 200); // 각 파일 다운로드 사이에 200ms 지연
+      });
+
+      alert(`${savedPlaylists.length}개의 플레이리스트가 개별 txt 파일로 저장되었습니다.`);
+    } catch (e) {
+      console.error('플레이리스트 내보내기 오류:', e);
+      alert('플레이리스트 내보내기에 실패했습니다.');
+    }
+  };
+
+  // txt 파일에서 플레이리스트 불러오기
+  const handleImportFromTxt = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.txt';
+    input.onchange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const content = event.target.result;
+          const lines = content.split('\n');
+          
+          const importedPlaylists = [];
+          let currentPlaylist = null;
+          let isInPlaylist = false;
+          let isInMusicList = false;
+
+          lines.forEach((line, index) => {
+            const trimmedLine = line.trim();
+            
+            // 플레이리스트 시작 감지
+            if (trimmedLine.match(/^\[\d+\]\s+.+$/)) {
+              if (currentPlaylist) {
+                importedPlaylists.push(currentPlaylist);
+              }
+              const match = trimmedLine.match(/^\[\d+\]\s+(.+)$/);
+              currentPlaylist = {
+                id: Date.now().toString() + index,
+                name: match ? match[1] : `플레이리스트 ${importedPlaylists.length + 1}`,
+                musics: [],
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+              };
+              isInPlaylist = true;
+              isInMusicList = false;
+            }
+            // 곡 목록 시작 감지
+            else if (trimmedLine === '--- 곡 목록 ---' && currentPlaylist) {
+              isInMusicList = true;
+            }
+            // 곡 항목 감지 (숫자. 제목 형식)
+            else if (isInMusicList && trimmedLine.match(/^\d+\.\s+.+$/)) {
+              const musicMatch = trimmedLine.match(/^\d+\.\s+(.+)$/);
+              if (musicMatch && currentPlaylist) {
+                currentPlaylist.musics.push({
+                  videoId: `imported_${Date.now()}_${currentPlaylist.musics.length}`,
+                  title: musicMatch[1],
+                  count: 0
+                });
+              }
+            }
+          });
+
+          // 마지막 플레이리스트 추가
+          if (currentPlaylist) {
+            importedPlaylists.push(currentPlaylist);
+          }
+
+          if (importedPlaylists.length === 0) {
+            alert('플레이리스트를 찾을 수 없습니다. 파일 형식을 확인해주세요.');
+            return;
+          }
+
+          // 기존 플레이리스트와 병합
+          const stored = localStorage.getItem('savedPlaylists');
+          const existingPlaylists = stored ? JSON.parse(stored) : [];
+          const mergedPlaylists = [...existingPlaylists, ...importedPlaylists];
+          
+          localStorage.setItem('savedPlaylists', JSON.stringify(mergedPlaylists));
+          loadSavedPlaylists();
+          alert(`${importedPlaylists.length}개의 플레이리스트가 불러와졌습니다.`);
+        } catch (e) {
+          console.error('플레이리스트 가져오기 오류:', e);
+          alert('플레이리스트 가져오기에 실패했습니다. 파일 형식을 확인해주세요.');
+        }
+      };
+      reader.readAsText(file, 'UTF-8');
+    };
+    input.click();
+  };
+
   // 페이징 계산 함수
   const getPagedData = (data, page) => {
     const startIndex = (page - 1) * itemsPerPage;
@@ -381,10 +557,29 @@ function PlaylistModal({ isOpen, onClose, queue, socket, onLoadPlaylist, hasCont
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content playlist-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>플레이리스트 관리</h2>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
-          </button>
+          <div className="modal-header-title">
+            <span className="material-icons">playlist_play</span>
+            <h2>플레이리스트 관리</h2>
+          </div>
+          <div className="modal-header-actions">
+            <button 
+              className="modal-action-btn export-btn"
+              onClick={handleExportAllToTxt}
+              title="모든 플레이리스트를 개별 txt 파일로 저장"
+            >
+              <span className="material-icons">download</span>
+            </button>
+            <button 
+              className="modal-action-btn import-btn"
+              onClick={handleImportFromTxt}
+              title="txt 파일에서 불러오기"
+            >
+              <span className="material-icons">upload</span>
+            </button>
+            <button className="modal-close-btn" onClick={onClose}>
+              <span className="material-icons">close</span>
+            </button>
+          </div>
         </div>
         
         <div className="playlist-content">
@@ -561,6 +756,13 @@ function PlaylistModal({ isOpen, onClose, queue, socket, onLoadPlaylist, hasCont
                       </div>
                     </div>
                     <div className="playlist-item-actions">
+                      <button 
+                        className="export-playlist-btn"
+                        onClick={(e) => handleExportPlaylistToTxt(playlist, e)}
+                        title="txt 파일로 저장"
+                      >
+                        <span className="material-icons">download</span>
+                      </button>
                       <button 
                         className="load-playlist-btn"
                         onClick={() => handleLoadPlaylist(playlist)}
