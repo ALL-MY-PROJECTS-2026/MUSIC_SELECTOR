@@ -195,9 +195,11 @@ io.on('connection', (socket) => {
       // 유튜브에서 검색 (페이징을 위해 더 많은 결과 반환)
       const searchResults = await youtubeService.search(query, 50);
       
+      // 검색 결과가 없어도 error 이벤트를 보내지 않고 빈 배열만 반환
+      // (여러 검색 쿼리 중 일부가 실패해도 계속 진행할 수 있도록)
       if (!searchResults || searchResults.length === 0) {
         socket.emit('searchResults', { results: [] });
-        socket.emit('error', { message: '검색 결과가 없습니다.' });
+        console.log(`검색 결과 없음: ${query}`);
         return;
       }
 
@@ -206,8 +208,10 @@ io.on('connection', (socket) => {
       console.log(`검색 결과 ${searchResults.length}개 반환`);
     } catch (error) {
       console.error('음악 검색 오류:', error);
+      // 에러 발생 시에도 빈 배열만 반환 (여러 검색 쿼리 중 일부가 실패해도 계속 진행)
       socket.emit('searchResults', { results: [] });
-      socket.emit('error', { message: '음악 검색 중 오류가 발생했습니다.' });
+      // error 이벤트는 실제 네트워크 오류나 서버 오류일 때만 전송
+      // 단순히 검색 결과가 없는 경우는 error 이벤트를 보내지 않음
     }
   });
 

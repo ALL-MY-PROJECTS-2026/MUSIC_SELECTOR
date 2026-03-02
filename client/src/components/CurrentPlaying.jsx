@@ -3341,6 +3341,10 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
             }}
           >
             <div ref={playerRef}></div>
+            {/* YouTube 컨트롤 버튼 영역 클릭 방지 오버레이 (재생 위치 이동은 허용) */}
+            {!localPlayMode && (
+              <div className="player-controls-overlay"></div>
+            )}
           </div>
           
           {/* 제어 버튼들 (제어권 있는 세션에서만) */}

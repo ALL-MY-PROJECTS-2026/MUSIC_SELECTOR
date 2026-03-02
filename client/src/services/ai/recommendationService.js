@@ -414,6 +414,56 @@ class RecommendationService {
   }
 
   /**
+   * 제목 차별화 보너스 계산 (같은 가수지만 다른 제목이면 보너스)
+   * @param {string} recTitle - 추천 노래 제목
+   * @param {Array} queueTitles - 대기열의 노래 제목 배열
+   * @returns {number} 제목 차별화 보너스 (0~1)
+   */
+  calculateTitleDiversityBonus(recTitle, queueTitles) {
+    if (!recTitle || !queueTitles || queueTitles.length === 0) {
+      return 0.2; // 대기열이 없으면 기본 보너스
+    }
+
+    const recSongTitle = this.extractSongTitle(recTitle);
+    const recNormalizedSongTitle = this.normalizeTitle(recSongTitle);
+    
+    if (recNormalizedSongTitle.length === 0) {
+      return 0; // 제목 추출 실패 시 보너스 없음
+    }
+
+    // 대기열의 모든 노래 제목과 비교
+    let maxSimilarity = 0;
+    for (const queueTitle of queueTitles) {
+      const queueSongTitle = this.extractSongTitle(queueTitle);
+      const queueNormalizedSongTitle = this.normalizeTitle(queueSongTitle);
+      
+      if (queueNormalizedSongTitle.length === 0) continue;
+      
+      // 제목 유사도 계산 (가수명 제외)
+      const similarity = this.calculateTitleSimilarity(recTitle, queueTitle);
+      maxSimilarity = Math.max(maxSimilarity, similarity);
+    }
+
+    // 제목 유사도가 낮을수록 (다른 제목일수록) 높은 보너스
+    if (maxSimilarity < 0.3) {
+      // 매우 다른 제목 (유사도 < 30%) → 최대 보너스
+      return 1.0;
+    } else if (maxSimilarity < 0.5) {
+      // 다른 제목 (유사도 < 50%) → 높은 보너스
+      return 0.8;
+    } else if (maxSimilarity < 0.7) {
+      // 약간 다른 제목 (유사도 < 70%) → 중간 보너스
+      return 0.5;
+    } else if (maxSimilarity < 0.85) {
+      // 유사한 제목 (유사도 < 85%) → 낮은 보너스
+      return 0.2;
+    } else {
+      // 매우 유사한 제목 (유사도 >= 85%) → 페널티 (같은 노래의 다른 버전)
+      return -0.3;
+    }
+  }
+
+  /**
    * 국내 음악인지 판단 (한국 가수 기준)
    * @param {string} title - 제목
    * @param {string} artist - 아티스트 이름 (선택적)
@@ -1362,8 +1412,8 @@ class RecommendationService {
       let isDuplicateInResults = false;
       for (const filteredTitle of filtered.map(f => f.title)) {
         const stringSimilarity = this.calculateTitleSimilarity(rec.title, filteredTitle);
-        if (stringSimilarity >= 0.70) {
-          // 추천 결과 내에서도 문자열 유사도가 높으면 제외 (75% → 70%로 더 강화)
+        if (stringSimilarity >= 0.85) {
+          // 추천 결과 내에서도 문자열 유사도가 높으면 제외 (85% 이상) - 같은 노래의 다른 버전 제외
           isDuplicateInResults = true;
           console.log(`[RecommendationService] 추천 결과 내 유사한 제목 제외 (문자열): "${rec.title}" vs "${filteredTitle}" (유사도: ${(stringSimilarity * 100).toFixed(1)}%)`);
           break;
@@ -1375,8 +1425,8 @@ class RecommendationService {
         for (let k = 0; k < seenEmbeddings.length; k++) {
           if (seenEmbeddings[k]) {
             const similarity = SimilarityCalculator.cosineSimilarity(recEmbedding, seenEmbeddings[k]);
-            if (similarity >= 0.70) {
-              // 추천 결과 내에서도 유사도가 높으면 제외 (0.75 → 0.70로 더 강화)
+            if (similarity >= 0.85) {
+              // 추천 결과 내에서도 유사도가 높으면 제외 (0.85 이상) - 같은 노래의 다른 버전 제외
               isDuplicateInResults = true;
               console.log(`[RecommendationService] 추천 결과 내 유사한 제목 제외 (임베딩): "${rec.title}" (유사도: ${(similarity * 100).toFixed(1)}%)`);
               break;
@@ -1516,8 +1566,8 @@ class RecommendationService {
       if (!isDuplicate) {
         for (let j = 0; j < allTitles.length; j++) {
           const stringSimilarity = this.calculateTitleSimilarity(rec.title, allTitles[j]);
-          if (stringSimilarity >= 0.70) {
-            // 문자열 유사도가 높으면 (70% 이상) 제외 (가수명 제외하고 제목만 비교)
+          if (stringSimilarity >= 0.85) {
+            // 문자열 유사도가 높으면 (85% 이상) 제외 (가수명 제외하고 제목만 비교) - 같은 노래의 다른 버전 제외
             isDuplicate = true;
             // j < queueTitles.length이면 대기열 또는 현재 재생 중인 음악
             const isCurrentPlaying = j === 0 && queue.length > 0; // 첫 번째 항목이 현재 재생 중인 음악일 가능성
@@ -1548,8 +1598,8 @@ class RecommendationService {
               allSongTitleEmbeddings[j]
             );
             
-            // 임계값을 더 낮춤 (0.80 → 0.70)
-            const effectiveThreshold = Math.min(titleSimilarityThreshold, 0.70);
+            // 임계값을 더 엄격하게 (0.70 → 0.85) - 같은 노래의 다른 버전 제외
+            const effectiveThreshold = Math.min(titleSimilarityThreshold, 0.85);
             if (similarity >= effectiveThreshold) {
               // 임베딩 유사도가 임계값 이상이면 제외 (가수명 제외하고 제목만 비교)
               isDuplicate = true;
@@ -1572,7 +1622,7 @@ class RecommendationService {
               allTitleEmbeddings[j]
             );
             
-            const effectiveThreshold = Math.min(titleSimilarityThreshold, 0.70);
+            const effectiveThreshold = Math.min(titleSimilarityThreshold, 0.85);
             if (similarity >= effectiveThreshold) {
               isDuplicate = true;
               const source = j < queueTitleEmbeddings.length ? '대기열' : '이전 추천';
@@ -1624,10 +1674,19 @@ class RecommendationService {
         reject(new Error('YouTube 검색 타임아웃'));
       }, 30000); // 30초 타임아웃
 
+      // error 이벤트 핸들러는 타임아웃 후에만 처리 (검색 결과가 없는 경우는 에러가 아님)
+      let errorHandler = null;
+      
       this.socket.emit('searchMusic', { query });
       
       this.socket.once('searchResults', (data) => {
         clearTimeout(timeout);
+        // error 이벤트 핸들러 제거 (검색 결과를 받았으므로 에러 핸들러 불필요)
+        if (errorHandler) {
+          this.socket.off('error', errorHandler);
+        }
+        
+        // 검색 결과가 없어도 빈 배열로 resolve (에러가 아님)
         if (data.results && data.results.length > 0) {
           resolve(data.results.slice(0, maxResults));
         } else {
@@ -1635,10 +1694,27 @@ class RecommendationService {
         }
       });
 
-      this.socket.once('error', (error) => {
+      // error 이벤트는 실제 네트워크 오류나 서버 오류일 때만 처리
+      // 단순히 검색 결과가 없는 경우는 무시
+      errorHandler = (error) => {
+        // 검색 결과가 없다는 메시지는 무시 (빈 배열로 처리)
+        if (error.message && error.message.includes('검색 결과가 없습니다')) {
+          clearTimeout(timeout);
+          if (errorHandler) {
+            this.socket.off('error', errorHandler);
+          }
+          resolve([]);
+          return;
+        }
+        // 실제 오류인 경우에만 reject
         clearTimeout(timeout);
+        if (errorHandler) {
+          this.socket.off('error', errorHandler);
+        }
         reject(new Error(error.message || 'YouTube 검색 실패'));
-      });
+      };
+      
+      this.socket.once('error', errorHandler);
     });
   }
 
@@ -2439,40 +2515,54 @@ class RecommendationService {
         };
       });
 
-      // 9. 최종 점수 계산 (다양성 보너스 포함)
+      // 9. 최종 점수 계산 (다양성 보너스 및 제목 차별화 보너스 포함)
       const scoredResults = [];
       const selectedArtists = []; // 다양성 계산을 위한 선택된 아티스트 추적
       
-      // 먼저 점수 계산 (다양성 보너스 없이)
-      const initialScoredResults = searchResultsWithArtists.map((result, index) => ({
-        ...result,
-        similarity: similarities[index],
-        popularityScore: popularityScores[index],
-        initialScore: this.calculateFinalScore(
-          similarities[index],
-          result.artistMatch,
-          popularityScores[index],
-          0, // 다양성 보너스는 나중에 추가
-          result.genreMatch, // 장르 일치 점수 포함
-          musicRegion, // 지역 기준 전달
-          result.qualityBonus, // 음질 보너스 포함
-          result.channelPriority // 채널 우선순위 포함
-        ),
-      }));
+      // 대기열 제목 배열 생성 (제목 차별화 보너스 계산용)
+      const queueTitles = queue.map(music => music.title);
       
-      // 점수 기준으로 정렬 (다양성 보너스 적용 전)
+      // 먼저 점수 계산 (다양성 보너스 및 제목 차별화 보너스 없이)
+      const initialScoredResults = searchResultsWithArtists.map((result, index) => {
+        // 제목 차별화 보너스 계산 (같은 가수지만 다른 제목이면 보너스)
+        const titleDiversityBonus = this.calculateTitleDiversityBonus(result.title, queueTitles);
+        
+        return {
+          ...result,
+          similarity: similarities[index],
+          popularityScore: popularityScores[index],
+          titleDiversityBonus: titleDiversityBonus, // 제목 차별화 보너스 저장
+          initialScore: this.calculateFinalScore(
+            similarities[index],
+            result.artistMatch,
+            popularityScores[index],
+            0, // 다양성 보너스는 나중에 추가
+            result.genreMatch, // 장르 일치 점수 포함
+            musicRegion, // 지역 기준 전달
+            result.qualityBonus, // 음질 보너스 포함
+            result.channelPriority // 채널 우선순위 포함
+          ),
+        };
+      });
+      
+      // 점수 기준으로 정렬 (다양성 보너스 및 제목 차별화 보너스 적용 전)
       initialScoredResults.sort((a, b) => b.initialScore - a.initialScore);
       
-      // 다양성 보너스를 적용하여 최종 점수 계산
+      // 다양성 보너스 및 제목 차별화 보너스를 적용하여 최종 점수 계산
       for (const result of initialScoredResults) {
         const diversityBonus = this.calculateDiversityBonus(
           result.extractedArtist,
           selectedArtists
         );
         
-        // 최종 점수 = initialScore + (diversityBonus * 가중치, 지역별로 다름)
+        // 제목 차별화 보너스 가중치 (같은 가수지만 다른 제목이면 높은 점수)
+        const titleDiversityWeight = 0.15; // 15% 가중치
+        
+        // 최종 점수 = initialScore + (diversityBonus * 가중치) + (titleDiversityBonus * 가중치)
         const diversityWeight = musicRegion === 'domestic' ? 0.02 : (musicRegion === 'international' ? 0.02 : 0.05);
-        const finalScore = result.initialScore + (diversityBonus * diversityWeight);
+        const finalScore = result.initialScore 
+          + (diversityBonus * diversityWeight)
+          + (result.titleDiversityBonus * titleDiversityWeight);
         
         scoredResults.push({
           ...result,
@@ -2492,9 +2582,9 @@ class RecommendationService {
       // 10. 최종 점수 기준으로 다시 정렬
       scoredResults.sort((a, b) => b.finalScore - a.finalScore);
 
-      // 11. 중복 제거 (videoId + 제목 유사도 확인, 임계값 강화: 0.80 → 0.75)
-      // 이전 추천 기록도 포함하여 중복 제거 (임계값 강화: 0.75 → 0.70)
-      const uniqueResults = await this.filterDuplicates(scoredResults, queue, 0.70);
+      // 11. 중복 제거 (videoId + 제목 유사도 확인, 임계값 강화: 0.85) - 같은 노래의 다른 버전 제외
+      // 이전 추천 기록도 포함하여 중복 제거
+      const uniqueResults = await this.filterDuplicates(scoredResults, queue, 0.85);
       console.log(`[RecommendationService] 중복 제거 완료: ${scoredResults.length}개 → ${uniqueResults.length}개`);
 
       // 11-1. 최종 재생 가능 여부 확인 (상위 추천 결과에 대해)
