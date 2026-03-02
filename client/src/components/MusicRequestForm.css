@@ -3,13 +3,12 @@
   padding: 25px;
   border: 1px solid var(--border-color);
   transition: background-color 0.3s, border-color 0.3s;
-  max-height: calc(100vh - 200px);
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
+  overflow: visible;
 }
 
 .music-request-form h2 {
@@ -76,10 +75,9 @@
 
 .search-results {
   margin-top: 20px;
-  flex: 1;
-  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: visible;
 }
 
 .search-results h3 {
@@ -93,10 +91,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  overflow-y: auto;
-  flex: 1;
-  min-height: 0;
-  max-height: calc(100vh - 400px);
+  overflow: visible;
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
@@ -224,117 +219,79 @@
   text-align: center;
 }
 
-/* 태블릿 및 작은 화면 */
-@media (max-width: 768px) {
+/* 모바일 반응형 스타일 */
+@media (max-width: 968px) {
   .music-request-form {
     padding: 20px;
-    max-height: calc(100vh - 150px);
   }
-  
+
   .music-request-form h2 {
     font-size: 1.3rem;
-    margin-bottom: 15px;
   }
-  
+
   .input-group {
     flex-direction: column;
     gap: 10px;
   }
-  
+
   .submit-btn {
     width: 100%;
     padding: 12px;
   }
-  
+
   .result-item {
     flex-direction: column;
     align-items: flex-start;
     gap: 10px;
   }
-  
+
   .result-thumbnail {
     width: 100%;
     height: auto;
-    max-height: 200px;
+    aspect-ratio: 16/9;
   }
-  
-  .result-thumbnail img {
-    width: 100%;
-    height: auto;
-  }
-  
+
   .select-btn {
     width: 100%;
-    text-align: center;
+    padding: 10px;
   }
-  
+
   .pagination {
     flex-wrap: wrap;
     gap: 10px;
   }
-  
-  .page-btn {
-    padding: 6px 15px;
-    font-size: 0.85rem;
-  }
 }
 
-/* 모바일 화면 */
 @media (max-width: 480px) {
   .music-request-form {
     padding: 15px;
-    max-height: calc(100vh - 120px);
   }
-  
+
   .music-request-form h2 {
-    font-size: 1.1rem;
-    margin-bottom: 12px;
+    font-size: 1.2rem;
+    margin-bottom: 15px;
   }
-  
+
   .music-input {
     padding: 10px 15px;
-    font-size: 0.9rem;
+    font-size: 0.95rem;
   }
-  
+
   .submit-btn {
     padding: 10px;
-    font-size: 0.9rem;
+    font-size: 0.95rem;
   }
-  
-  .search-results h3 {
-    font-size: 1rem;
-    margin-bottom: 12px;
-  }
-  
+
   .result-item {
     padding: 10px;
   }
-  
+
   .result-info h4 {
     font-size: 0.9rem;
   }
-  
-  .result-duration {
-    font-size: 0.8rem;
-  }
-  
+
   .select-btn {
     padding: 8px 15px;
     font-size: 0.85rem;
   }
-  
-  .pagination {
-    gap: 8px;
-  }
-  
-  .page-btn {
-    padding: 6px 12px;
-    font-size: 0.8rem;
-  }
-  
-  .page-info {
-    font-size: 0.8rem;
-    min-width: 50px;
-  }
 }
-

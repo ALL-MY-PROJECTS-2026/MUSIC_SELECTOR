@@ -18,6 +18,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
   const endedSentRef = useRef(false); // 재생 종료 알림 중복 방지
   const pauseTimeRef = useRef(null); // 일시정지 시점 저장
+  const manualNextRef = useRef(false); // 수동 다음 곡 전환 플래그
   const previousHasControlRef = useRef(false); // 이전 제어권 상태 추적 (제어권 획득 시점 감지용)
   const previousVideoIdRef = useRef(null); // 이전 videoId 추적 (새 음악 시작 감지용)
   const previousMusicRef = useRef(null); // 이전 music 추적 (music null에서 새 music으로 변경 감지용)
@@ -31,6 +32,8 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
   const previousPositionRef = useRef(null); // 이전 재생 위치 (seek 감지용)
   const seekCheckIntervalRef = useRef(null); // seek 감지 인터벌
   const lastPlayAttemptRef = useRef(null); // 마지막 재생 시도 시간 (중복 재생 방지)
+  const isResumingRef = useRef(false); // 재생 재개 시도 중 플래그 (handleResume에서 재생을 시도하는 중임을 표시)
+  const resumeStartTimeRef = useRef(null); // 재생 재개 시도 시작 시간 (타임아웃 계산용)
 
   // YouTube IFrame API 로드
   useEffect(() => {
@@ -244,6 +247,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
         setPlayerReady(false);
         endedSentRef.current = false;
         pauseTimeRef.current = null;
+        manualNextRef.current = false; // 수동 다음 곡 전환 플래그 리셋
         // 플레이어 재생성 로직으로 진행 (아래 needsRecreate 로직 사용)
       }
       // videoId가 다르거나, getVideoData가 실패했거나, 플레이어가 ENDED 상태이면 새 비디오 로드
@@ -258,6 +262,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
         });
         endedSentRef.current = false; // 새 음악 재생 시 플래그 리셋
         pauseTimeRef.current = null; // 새 음악 재생 시 일시정지 위치 초기화
+        manualNextRef.current = false; // 수동 다음 곡 전환 플래그 리셋
         lastPlayAttemptRef.current = null; // 재생 시도 시간 리셋
         try {
           // 기존 플레이어가 있으면 완전히 정리 (새 비디오 로드 전)
@@ -393,10 +398,11 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                   });
                   
                   // PLAYING 상태가 아니면 재생 시도 (단, 최근 500ms 이내 재생 시도가 없을 때만)
+                  // 단, BUFFERING 상태일 때는 재생 시도하지 않음 (버퍼링 중에는 재생 시도하면 스피너가 계속 나타날 수 있음)
                   const now = Date.now();
                   const timeSinceLastAttempt = lastPlayAttemptRef.current ? now - lastPlayAttemptRef.current : Infinity;
                   
-                  if (playerState !== window.YT.PlayerState.PLAYING && timeSinceLastAttempt > 500) {
+                  if (playerState !== window.YT.PlayerState.PLAYING && playerState !== window.YT.PlayerState.BUFFERING && timeSinceLastAttempt > 500) {
                     if (typeof youtubePlayerRef.current.playVideo === 'function') {
                       const playCallTime = Date.now();
                       console.log('[loadVideoById] playVideo() 호출 시작, 호출 전 상태:', playerState);
@@ -412,15 +418,19 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                     }
                   } else if (playerState === window.YT.PlayerState.PLAYING) {
                     console.log('[loadVideoById] 이미 PLAYING 상태 - 재생 시도 불필요');
+                  } else if (playerState === window.YT.PlayerState.BUFFERING) {
+                    console.log('[loadVideoById] BUFFERING 상태 - 재생 시도하지 않음 (정상 상태)');
                   } else if (timeSinceLastAttempt <= 500) {
                     console.log('[loadVideoById] 최근 재생 시도가 있어서 중복 호출 방지 (경과:', timeSinceLastAttempt, 'ms)');
                   }
                   
-                  // PLAYING 상태가 아니고 아직 시도 횟수가 남아있으면 계속 시도
-                  if (playerState !== window.YT.PlayerState.PLAYING && attemptCount < maxAttempts - 1) {
+                  // PLAYING 상태가 아니고 BUFFERING도 아니며 아직 시도 횟수가 남아있으면 계속 시도
+                  if (playerState !== window.YT.PlayerState.PLAYING && playerState !== window.YT.PlayerState.BUFFERING && attemptCount < maxAttempts - 1) {
                     attemptPlay(attemptCount + 1);
                   } else if (playerState === window.YT.PlayerState.PLAYING) {
                     console.log('[loadVideoById] 재생 성공! PLAYING 상태');
+                  } else if (playerState === window.YT.PlayerState.BUFFERING) {
+                    console.log('[loadVideoById] BUFFERING 상태 - 재생 대기 중 (정상 상태)');
                   } else if (playerState === window.YT.PlayerState.UNSTARTED && attemptCount >= maxAttempts - 1) {
                     // 최대 시도 횟수에 도달했는데도 UNSTARTED 상태면 재생 불가능한 동영상
                     console.log('[loadVideoById] 동영상 재생 불가능 감지 - 다음 곡으로 이동');
@@ -549,6 +559,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
       setPlayerReady(false);
       endedSentRef.current = false; // 새 음악 재생 시 플래그 리셋
       pauseTimeRef.current = null; // 새 음악 재생 시 일시정지 위치 초기화
+      manualNextRef.current = false; // 수동 다음 곡 전환 플래그 리셋
       lastPlayAttemptRef.current = null; // 재생 시도 시간 리셋
 
       console.log('[플레이어 생성 useEffect] 새 플레이어 생성 시작:', music.videoId, 'isPlaying:', isPlaying);
@@ -922,7 +933,9 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
               }
               
               // 중복 전송 방지 및 제어권 확인
-              if (!endedSentRef.current && window.socket && hasControl) {
+              // 단, 정지 상태(isPlaying === false)에서는 다음 곡으로 넘어가지 않음
+              // 단, 수동 다음 곡 전환(manualNextRef.current === true)인 경우는 허용
+              if (!endedSentRef.current && window.socket && hasControl && (isPlaying || manualNextRef.current)) {
                 endedSentRef.current = true;
                 console.log('[onStateChange] musicEnded 이벤트 전송 시작 (제어권 보유)', {
                   videoId: music?.videoId,
@@ -933,6 +946,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                   elapsedSeconds: elapsedSinceMusicStart ? (elapsedSinceMusicStart / 1000).toFixed(2) : null
                 });
                 window.socket.emit('musicEnded');
+                manualNextRef.current = false; // musicEnded 전송 후 수동 다음 곡 전환 플래그 리셋
                 const sentTime = Date.now();
                 console.log('[onStateChange] musicEnded 이벤트 전송 완료', {
                   전송시간: sentTime,
@@ -950,62 +964,199 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
             // 재생 중이면 플래그 리셋 (일시정지 시간은 재생 시작 후 초기화)
             if (event.data === window.YT.PlayerState.PLAYING) {
               endedSentRef.current = false;
-              // 재생이 시작되면 일시정지 시간 즉시 초기화 (handleResume에서 이미 초기화했을 수 있음)
-              // seekTo가 완료된 후 초기화하되, 이미 null이면 무시
-              if (pauseTimeRef.current !== null) {
+            // 재생이 시작되면 일시정지 시간 확인 및 위치 동기화
+            // handleResume에서 재생 재개 시 정지된 위치를 정확히 유지하도록 함
+            if (pauseTimeRef.current !== null) {
+              const pausedPosition = pauseTimeRef.current;
+              
+              // 재생 재개 시도 중이면 정지된 위치를 확인하여 정확히 그 위치에서 재생되도록 함
+              if (isResumingRef.current) {
+                try {
+                  const currentPosition = youtubePlayerRef.current.getCurrentTime();
+                  const positionDiff = Math.abs(currentPosition - pausedPosition);
+                  
+                  // 위치가 1초 이상 차이나면 다시 seekTo 시도
+                  if (positionDiff > 1.0) {
+                    console.log('[onStateChange] 재생 시작 시 위치 불일치 감지, 다시 seekTo:', {
+                      저장된위치: pausedPosition,
+                      현재위치: currentPosition,
+                      차이: positionDiff
+                    });
+                    youtubePlayerRef.current.seekTo(pausedPosition, true);
+                    // seekTo 후 pauseTimeRef는 유지 (재생 위치 동기화 완료 후 초기화)
+                    return; // 위치 조정 중이므로 나머지 로직은 건너뜀
+                  } else {
+                    console.log('[onStateChange] 재생 시작 - 정지된 위치에서 정확히 재생됨:', {
+                      저장된위치: pausedPosition,
+                      현재위치: currentPosition,
+                      차이: positionDiff
+                    });
+                  }
+                } catch (e) {
+                  console.log('[onStateChange] 재생 위치 확인 오류:', e);
+                }
+              }
+              
+              // 재생 재개 시도 중이 아니거나 위치가 정확하면 pauseTimeRef 초기화
+              // YouTube controls로 재생 버튼을 눌렀을 때 pauseTimeRef를 초기화하여 재생 가능하게 함
+              pauseTimeRef.current = null;
+              console.log('[onStateChange] 재생 시작 - 일시정지 위치 초기화:', pausedPosition, '초');
+            }
+            
+            // 재생이 시작되면 재생 재개 시도 플래그 해제
+            if (isResumingRef.current) {
+              isResumingRef.current = false;
+              resumeStartTimeRef.current = null;
+              console.log('[onStateChange] 재생 시작 - 재생 재개 시도 플래그 해제');
+            }
+              
+              // YouTube 컨트롤로 재생한 경우 처리 (pauseTimeRef 초기화 후)
+              // '내 장치로 듣기' 모드: 로컬만 처리, 서버 전송 없음
+              if (localPlayMode && !hasControl) {
+                setLocalIsPlaying(true);
+                lastPlayAttemptRef.current = Date.now(); // 재생 시도 시간 업데이트 (재생 상태 동기화 useEffect가 정지하지 않도록)
+                console.log('[onStateChange] YouTube 컨트롤로 재생 - 내 장치로 듣기 모드 (로컬만 처리)');
+              }
+              // '서버 장치로 듣기' 모드: 서버에 재생 요청 전송
+              else if (!localPlayMode && hasControl && !isPlaying && window.socket && music) {
+                // 재생 시도 시간 업데이트 (재생 상태 동기화 useEffect가 정지하지 않도록)
+                lastPlayAttemptRef.current = Date.now();
+                
+                // 재생 위치를 서버에 전송
+                try {
+                  const currentTime = youtubePlayerRef.current.getCurrentTime();
+                  if (currentTime > 0) {
+                    window.socket.emit('updatePlaybackPosition', {
+                      position: currentTime,
+                      videoId: music.videoId
+                    });
+                    console.log('[onStateChange] YouTube 컨트롤로 재생 - 재생 위치 서버 전송:', currentTime, '초');
+                  }
+                } catch (e) {
+                  console.log('[onStateChange] 재생 위치 가져오기 오류:', e);
+                }
+                
+                // 서버에 재생 요청 전송
                 setTimeout(() => {
-                  pauseTimeRef.current = null;
-                }, 500);
+                  if (window.socket && hasControl && !localPlayMode) {
+                    window.socket.emit('resumeMusic');
+                    console.log('[onStateChange] YouTube 컨트롤로 재생 - 서버에 재생 요청 전송');
+                  }
+                }, 100);
               }
             }
             // 일시정지 시 현재 재생 위치 저장 (백업 - handlePause에서 저장하지 못한 경우 대비)
             if (event.data === window.YT.PlayerState.PAUSED) {
-              lastPlayAttemptRef.current = null; // 일시정지 시 재생 시도 시간 리셋
               if (youtubePlayerRef.current) {
                 try {
                   const currentTime = youtubePlayerRef.current.getCurrentTime();
+                  
+                  // 재생 재개 시도 중이거나 최근 재생 시도가 있었으면 (handleResume에서 재생을 시도한 경우) pauseTimeRef를 설정하지 않음
+                  const now = Date.now();
+                  const timeSinceLastAttempt = lastPlayAttemptRef.current ? now - lastPlayAttemptRef.current : Infinity;
+                  const timeSinceResumeStart = resumeStartTimeRef.current ? now - resumeStartTimeRef.current : Infinity;
+                  
                   // 위치가 저장되지 않았거나 0보다 크면 저장
                   // 서버가 재생 중인데 일시정지된 경우에만 저장 (사용자가 의도적으로 일시정지한 경우)
                   // 서버가 일시정지 상태인데 플레이어가 일시정지된 경우도 저장 (서버 일시정지 상태 반영)
+                  // 단, 재생 재개 시도 중이거나 최근 5초 이내에 재생 시도가 있었으면 pauseTimeRef를 설정하지 않음 (handleResume에서 재생을 시도한 경우)
                   if (currentTime > 0 && (pauseTimeRef.current === null || pauseTimeRef.current === 0)) {
-                    if (isPlaying && hasControl) {
-                      // 서버가 재생 중인데 플레이어가 일시정지된 경우 (사용자가 의도적으로 일시정지한 경우)
+                    // 재생 재개 시도 중이거나 최근 재생 시도가 있었으면 pauseTimeRef를 설정하지 않음 (handleResume에서 재생을 시도한 경우)
+                    // 재생 재개 시도 시작 후 5초 이내에는 pauseTimeRef를 설정하지 않음
+                    if (isResumingRef.current || timeSinceResumeStart < 5000 || timeSinceLastAttempt < 2000) {
+                      console.log('[onStateChange] 재생 재개 시도 중 또는 최근 재생 시도 감지 (handleResume) - pauseTimeRef 설정하지 않음:', {
+                        isResuming: isResumingRef.current,
+                        timeSinceResumeStart: (timeSinceResumeStart / 1000).toFixed(2) + '초',
+                        timeSinceLastAttempt: (timeSinceLastAttempt / 1000).toFixed(2) + '초',
+                        currentTime
+                      });
+                      // pauseTimeRef는 설정하지 않음 (재생 상태 동기화 useEffect가 정지하지 않도록)
+                      // lastPlayAttemptRef는 리셋하지 않음 (재생 재개 시도 중이므로)
+                      return; // pauseTimeRef 설정하지 않고 종료
+                    }
+                    
+                    // '내 장치로 듣기' 모드: 로컬만 처리, 서버 전송 없음
+                    if (localPlayMode && !hasControl) {
                       pauseTimeRef.current = currentTime;
-                      console.log('[onStateChange] 일시정지 상태 감지 - 위치 저장 (백업):', currentTime, '초, 서버는 재생 중');
+                      setLocalIsPlaying(false);
+                      lastPlayAttemptRef.current = null; // 일시정지 시 재생 시도 시간 리셋
+                      console.log('[onStateChange] 일시정지 상태 감지 - 내 장치로 듣기 모드 (로컬만 처리):', currentTime, '초');
+                    }
+                    // '서버 장치로 듣기' 모드: 서버에 정지 요청 전송
+                    else if (!localPlayMode && isPlaying && hasControl) {
+                      // 서버가 재생 중인데 플레이어가 일시정지된 경우 (YouTube 컨트롤로 일시정지한 경우 포함)
+                      pauseTimeRef.current = currentTime;
+                      lastPlayAttemptRef.current = null; // 일시정지 시 재생 시도 시간 리셋
+                      console.log('[onStateChange] 일시정지 상태 감지 - 위치 저장 (YouTube 컨트롤):', currentTime, '초, 서버는 재생 중');
+                      // YouTube 컨트롤로 정지한 경우 서버에 정지 요청 전송
+                      if (window.socket && hasControl) {
+                        // 재생 위치를 서버에 전송하여 정지 시점 저장
+                        window.socket.emit('updatePlaybackPosition', {
+                          position: currentTime,
+                          videoId: music?.videoId
+                        });
+                        // 서버에 정지 요청 전송
+                        window.socket.emit('pauseMusic');
+                        console.log('[onStateChange] YouTube 컨트롤로 정지 - 서버에 정지 요청 전송');
+                      }
                     } else if (!isPlaying) {
                       // 서버가 일시정지 상태인데 플레이어가 일시정지된 경우 (서버 일시정지 상태 반영, 로컬 재생 모드여도 정지)
                       pauseTimeRef.current = currentTime;
+                      lastPlayAttemptRef.current = null; // 일시정지 시 재생 시도 시간 리셋
                       console.log('[onStateChange] 일시정지 상태 감지 - 위치 저장 (서버 일시정지 상태 반영, 로컬 재생 모드여도 정지):', currentTime, '초');
                     }
                   } else if (currentTime > 0 && pauseTimeRef.current === null && !isPlaying) {
                     // pauseTimeRef가 null이고 서버가 일시정지 상태이면 설정 (로컬 재생 모드여도 정지)
-                    pauseTimeRef.current = currentTime;
-                    console.log('[onStateChange] 일시정지 상태 감지 - 위치 저장 (서버 일시정지 상태 반영, 재시도, 로컬 재생 모드여도 정지):', currentTime, '초');
+                    // 단, 재생 재개 시도 중이거나 최근 재생 시도가 있었으면 설정하지 않음
+                    const timeSinceResumeStart = resumeStartTimeRef.current ? now - resumeStartTimeRef.current : Infinity;
+                    if (!isResumingRef.current && timeSinceResumeStart >= 5000 && timeSinceLastAttempt >= 2000) {
+                      pauseTimeRef.current = currentTime;
+                      lastPlayAttemptRef.current = null; // 일시정지 시 재생 시도 시간 리셋
+                      console.log('[onStateChange] 일시정지 상태 감지 - 위치 저장 (서버 일시정지 상태 반영, 재시도, 로컬 재생 모드여도 정지):', currentTime, '초');
+                    }
                   } else if (pauseTimeRef.current === null && !isPlaying) {
                     // 재생 위치를 가져올 수 없어도 서버가 일시정지 상태이면 pauseTimeRef를 설정하여 자동 재생을 막음 (로컬 재생 모드여도 정지)
-                    pauseTimeRef.current = 0;
-                    console.log('[onStateChange] 일시정지 상태 감지 - 일시정지 위치를 가져올 수 없어 0으로 설정 (서버 일시정지 상태 반영, 로컬 재생 모드여도 정지)');
+                    // 단, 재생 재개 시도 중이거나 최근 재생 시도가 있었으면 설정하지 않음
+                    const timeSinceResumeStart = resumeStartTimeRef.current ? now - resumeStartTimeRef.current : Infinity;
+                    if (!isResumingRef.current && timeSinceResumeStart >= 5000 && timeSinceLastAttempt >= 2000) {
+                      pauseTimeRef.current = 0;
+                      lastPlayAttemptRef.current = null; // 일시정지 시 재생 시도 시간 리셋
+                      console.log('[onStateChange] 일시정지 상태 감지 - 일시정지 위치를 가져올 수 없어 0으로 설정 (서버 일시정지 상태 반영, 로컬 재생 모드여도 정지)');
+                    }
                   }
                 } catch (e) {
                   // 재생 위치를 가져올 수 없어도 서버가 일시정지 상태이면 pauseTimeRef를 설정하여 자동 재생을 막음 (로컬 재생 모드여도 정지)
-                  if (pauseTimeRef.current === null && !isPlaying) {
+                  // 단, 재생 재개 시도 중이거나 최근 재생 시도가 있었으면 설정하지 않음
+                  const now = Date.now();
+                  const timeSinceLastAttempt = lastPlayAttemptRef.current ? now - lastPlayAttemptRef.current : Infinity;
+                  const timeSinceResumeStart = resumeStartTimeRef.current ? now - resumeStartTimeRef.current : Infinity;
+                  if (pauseTimeRef.current === null && !isPlaying && !isResumingRef.current && timeSinceResumeStart >= 5000 && timeSinceLastAttempt >= 2000) {
                     pauseTimeRef.current = 0;
+                    lastPlayAttemptRef.current = null; // 일시정지 시 재생 시도 시간 리셋
                     console.log('[onStateChange] 일시정지 상태 감지 - 재생 위치 가져오기 오류, 0으로 설정 (서버 일시정지 상태 반영, 로컬 재생 모드여도 정지):', e);
                   } else {
-                  console.log('재생 위치 가져오기 오류:', e);
+                    console.log('재생 위치 가져오기 오류:', e);
+                  }
+                }
+              } else {
+                // 플레이어가 없어도 재생 재개 시도 중이 아니고 최근 재생 시도가 없으면 리셋
+                if (!isResumingRef.current) {
+                  const now = Date.now();
+                  const timeSinceLastAttempt = lastPlayAttemptRef.current ? now - lastPlayAttemptRef.current : Infinity;
+                  if (timeSinceLastAttempt >= 2000) {
+                    lastPlayAttemptRef.current = null; // 일시정지 시 재생 시도 시간 리셋
                   }
                 }
               }
               // 일시정지 위치가 저장되어 있으면 사용자가 의도적으로 일시정지한 것이므로 자동 재생하지 않음
-              // 일시정지 위치가 없고 서버가 재생 중이라고 하면 자동 재생 (YouTube 컨트롤로 일시정지한 경우)
-              // 단, pauseTimeRef가 방금 저장된 경우는 사용자가 의도적으로 일시정지한 것이므로 재생하지 않음
-              // 제어권이 있을 때만 자동 재생
+              // pauseTimeRef가 설정되어 있으면 자동 재생하지 않음 (YouTube 컨트롤로 정지한 경우도 포함)
+              // '서버 장치로 듣기' 모드에서만 자동 재생 (로컬 재생 모드에서는 자동 재생하지 않음)
               // 단, 최근 재생 시도가 없을 때만 재생
-              if (isPlaying && hasControl && youtubePlayerRef.current && pauseTimeRef.current === null) {
+              if (isPlaying && hasControl && !localPlayMode && youtubePlayerRef.current && pauseTimeRef.current === null) {
                 const now = Date.now();
                 const timeSinceLastAttempt = lastPlayAttemptRef.current ? now - lastPlayAttemptRef.current : Infinity;
                 if (timeSinceLastAttempt > 500) {
-                console.log('[onStateChange] 서버는 재생 중인데 플레이어는 일시정지 - 자동 재생 시도');
+                console.log('[onStateChange] 서버는 재생 중인데 플레이어는 일시정지 - 자동 재생 시도 (서버 장치로 듣기 모드)');
                 try {
                     lastPlayAttemptRef.current = now;
                   youtubePlayerRef.current.playVideo();
@@ -1020,30 +1171,37 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
             // CUED 상태는 비디오가 로드되어 재생 준비가 된 상태
             // 제어권이 있거나 로컬 재생 모드이면 재생 시도
             // 단, 서버가 일시정지 상태이거나 일시정지 위치가 저장되어 있으면 재생하지 않음
+            // 단, BUFFERING 상태가 아닐 때만 재생 (BUFFERING 중에는 재생 시도하지 않음)
             if (event.data === window.YT.PlayerState.CUED && (hasControl || localPlayMode) && pauseTimeRef.current === null && (isPlaying || localPlayMode)) {
-              console.log('[onStateChange] CUED 상태 감지 - 즉시 재생 시도');
-              // CUED 상태에서 즉시 재생 시도 (모바일에서 지연될 수 있으므로)
+              console.log('[onStateChange] CUED 상태 감지 - 재생 시도');
+              // CUED 상태에서 재생 시도 (모바일에서 지연될 수 있으므로)
               // 단, 최근 재생 시도가 없을 때만 재생
               if (youtubePlayerRef.current && typeof youtubePlayerRef.current.playVideo === 'function') {
                 const now = Date.now();
                 const timeSinceLastAttempt = lastPlayAttemptRef.current ? now - lastPlayAttemptRef.current : Infinity;
-                if (timeSinceLastAttempt > 500) {
+                if (timeSinceLastAttempt > 1000) { // 500ms에서 1000ms로 증가 (재생 시도 빈도 감소)
                 try {
                     lastPlayAttemptRef.current = now;
                   youtubePlayerRef.current.playVideo();
                   console.log('[onStateChange] CUED 상태에서 재생 시도 완료');
                   
-                  // 재생이 시작되었는지 확인 (더 짧은 간격으로 여러 번 시도)
+                  // 재생이 시작되었는지 확인 (더 긴 간격으로 제한된 횟수만 시도)
                   let retryCount = 0;
-                  const maxRetries = 5;
+                  const maxRetries = 3; // 5에서 3으로 감소
                   const checkAndRetry = () => {
                     setTimeout(() => {
                         if (youtubePlayerRef.current && (hasControl || localPlayMode) && pauseTimeRef.current === null && (isPlaying || localPlayMode)) {
                         const state = youtubePlayerRef.current.getPlayerState();
+                          // PLAYING이거나 BUFFERING이면 재시도 중단 (BUFFERING은 정상 상태)
+                          if (state === window.YT.PlayerState.PLAYING || state === window.YT.PlayerState.BUFFERING) {
+                            console.log('[onStateChange] 재생 시작됨 또는 버퍼링 중:', state === window.YT.PlayerState.PLAYING ? 'PLAYING' : 'BUFFERING');
+                            return; // 재시도 중단
+                          }
+                          
                           const attemptNow = Date.now();
                           const timeSinceLastAttempt = lastPlayAttemptRef.current ? attemptNow - lastPlayAttemptRef.current : Infinity;
-                          if (state !== window.YT.PlayerState.PLAYING && retryCount < maxRetries && timeSinceLastAttempt > 500) {
-                          // 재생이 시작되지 않았으면 다시 시도
+                          if (state !== window.YT.PlayerState.PLAYING && state !== window.YT.PlayerState.BUFFERING && retryCount < maxRetries && timeSinceLastAttempt > 1000) {
+                          // 재생이 시작되지 않았고 BUFFERING도 아니면 다시 시도
                           console.log(`[onStateChange] CUED 상태에서 재생이 시작되지 않음, 재시도 ${retryCount + 1}/${maxRetries}, 현재 상태:`, state);
                           if (typeof youtubePlayerRef.current.playVideo === 'function') {
                               lastPlayAttemptRef.current = attemptNow;
@@ -1051,11 +1209,9 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                           }
                           retryCount++;
                           checkAndRetry();
-                        } else if (state === window.YT.PlayerState.PLAYING) {
-                          console.log('[onStateChange] CUED 상태에서 재생 성공!');
                         }
                       }
-                    }, 300); // 300ms마다 확인
+                    }, 1000); // 300ms에서 1000ms로 증가 (재시도 간격 증가)
                   };
                   checkAndRetry();
                 } catch (e) {
@@ -1067,10 +1223,11 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
             // UNSTARTED 상태도 재생 시도 (loadVideoById 직후 발생할 수 있음)
             // 단, 서버가 일시정지 상태이거나 일시정지 위치가 저장되어 있으면 재생하지 않음
             // 단, 최근 재생 시도가 없을 때만 재생
+            // 단, BUFFERING 상태가 아닐 때만 재생 (BUFFERING 중에는 재생 시도하지 않음)
             if (event.data === window.YT.PlayerState.UNSTARTED && (hasControl || localPlayMode) && pauseTimeRef.current === null && (isPlaying || localPlayMode)) {
               const now = Date.now();
               const timeSinceLastAttempt = lastPlayAttemptRef.current ? now - lastPlayAttemptRef.current : Infinity;
-              if (timeSinceLastAttempt > 500) {
+              if (timeSinceLastAttempt > 1000) { // 500ms에서 1000ms로 증가 (재생 시도 빈도 감소)
               console.log('[onStateChange] UNSTARTED 상태 감지 - 재생 시도');
               if (youtubePlayerRef.current && typeof youtubePlayerRef.current.playVideo === 'function') {
                 try {
@@ -1078,19 +1235,24 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                   youtubePlayerRef.current.playVideo();
                   console.log('[onStateChange] UNSTARTED 상태에서 재생 시도 완료');
                   
-                  // UNSTARTED 상태에서도 재생 확인 및 재시도
+                  // UNSTARTED 상태에서도 재생 확인 및 재시도 (단, BUFFERING이면 중단)
                   setTimeout(() => {
                       if (youtubePlayerRef.current && (hasControl || localPlayMode) && pauseTimeRef.current === null && (isPlaying || localPlayMode)) {
                       const state = youtubePlayerRef.current.getPlayerState();
+                        // BUFFERING이면 재시도 중단 (정상 상태)
+                        if (state === window.YT.PlayerState.BUFFERING) {
+                          console.log('[onStateChange] BUFFERING 상태 감지 - 재시도 중단');
+                          return;
+                        }
                         const attemptNow = Date.now();
                         const timeSinceLastAttempt = lastPlayAttemptRef.current ? attemptNow - lastPlayAttemptRef.current : Infinity;
-                        if (state === window.YT.PlayerState.UNSTARTED && typeof youtubePlayerRef.current.playVideo === 'function' && timeSinceLastAttempt > 500) {
+                        if (state === window.YT.PlayerState.UNSTARTED && typeof youtubePlayerRef.current.playVideo === 'function' && timeSinceLastAttempt > 1000) {
                         console.log('[onStateChange] UNSTARTED 상태 유지 - 재시도');
                           lastPlayAttemptRef.current = attemptNow;
                         youtubePlayerRef.current.playVideo();
                       }
                     }
-                  }, 500);
+                  }, 1000); // 500ms에서 1000ms로 증가
                 } catch (e) {
                   console.log('[onStateChange] UNSTARTED 상태에서 재생 시도 오류:', e);
                   }
@@ -1192,6 +1354,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
       setPlayerReady(false);
       endedSentRef.current = false;
       pauseTimeRef.current = null;
+      manualNextRef.current = false; // 수동 다음 곡 전환 플래그 리셋
     }
   }, [music]);
 
@@ -1202,6 +1365,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
       previousVideoIdRef.current = music.videoId;
       if (isNewMusic) {
         endedSentRef.current = false;
+        manualNextRef.current = false; // 수동 다음 곡 전환 플래그 리셋
         lastPlayAttemptRef.current = null; // 새 음악 시작 시 재생 시도 시간 리셋
         // 새 음악 시작 시 동기화 시간 리셋 (즉시 동기화 가능하도록)
         lastSyncTimeForControlRef.current = 0;
@@ -1293,9 +1457,13 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
     }
   };
 
-  // 일시정지 버튼 핸들러
+  // 일시정지 버튼 핸들러 (하단 버튼 숨김 처리로 사용되지 않지만, 예방적 수정)
   const handlePause = () => {
     if (!isPlaying) return; // 이미 일시정지 상태면 무시
+    
+    // 재생 재개 시도 플래그 해제 (정지 버튼을 누르면 재생 재개 시도 취소)
+    isResumingRef.current = false;
+    resumeStartTimeRef.current = null;
     
     if (youtubePlayerRef.current && hasControl) {
       try {
@@ -1305,6 +1473,19 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
         if (currentTime > 0) {
           pauseTimeRef.current = currentTime;
           console.log('일시정지 버튼 클릭 - 현재 위치 저장:', currentTime, '초');
+          // '서버 장치로 듣기' 모드에서만 서버에 재생 위치 전송
+          if (!localPlayMode && window.socket && music) {
+            window.socket.emit('updatePlaybackPosition', {
+              position: currentTime,
+              videoId: music.videoId
+            });
+            console.log('[handlePause] 정지 시점 재생 위치 서버 전송:', currentTime, '초');
+          }
+          // '내 장치로 듣기' 모드: 로컬 상태만 업데이트
+          if (localPlayMode && !hasControl) {
+            setLocalIsPlaying(false);
+            console.log('[handlePause] 내 장치로 듣기 모드 - 로컬 상태만 업데이트');
+          }
         } else {
           // 재생 위치를 가져올 수 없어도 pauseTimeRef를 설정하여 자동 재생을 막음
           pauseTimeRef.current = 0;
@@ -1335,8 +1516,10 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
       }
       lastPlayAttemptRef.current = null;
     }
-    // 서버에 일시정지 요청
-    onPause();
+    // '서버 장치로 듣기' 모드에서만 서버에 일시정지 요청
+    if (!localPlayMode) {
+      onPause();
+    }
   };
 
   // 볼륨 조절 핸들러
@@ -1385,12 +1568,13 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
     }
   }, [showVolumeSlider]);
 
-  // 다시시작 버튼 핸들러
+  // 다시시작 버튼 핸들러 (하단 버튼 숨김 처리로 사용되지 않지만, 예방적 수정)
   const handleResume = () => {
     console.log('[handleResume] 다시시작 버튼 클릭:', {
       isPlaying,
       hasPlayer: !!youtubePlayerRef.current,
       hasControl,
+      localPlayMode,
       pauseTime: pauseTimeRef.current,
       playerReady
     });
@@ -1400,24 +1584,98 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
       return; // 이미 재생 중이면 무시
     }
     
-    // 플레이어가 없거나 제어권이 없으면 서버에만 재생 요청
+    // 플레이어가 없거나 제어권이 없으면 서버에만 재생 요청 ('서버 장치로 듣기' 모드에서만)
     if (!youtubePlayerRef.current || !hasControl) {
       console.log('[handleResume] 플레이어 또는 제어권 없음 - 서버에만 재생 요청');
-      onResume();
+      if (!localPlayMode) {
+        onResume();
+      }
       return;
     }
     
-    // 플레이어가 준비되지 않았으면 서버에만 재생 요청
+    // 플레이어가 준비되지 않았으면 서버에만 재생 요청 ('서버 장치로 듣기' 모드에서만)
     if (!playerReady) {
       console.log('[handleResume] 플레이어가 준비되지 않음 - 서버에만 재생 요청');
-      onResume();
+      if (!localPlayMode) {
+        onResume();
+      }
       return;
     }
     
-    // 일시정지 위치를 먼저 초기화 (재생 상태 동기화 useEffect가 재생을 막지 않도록)
+    // 일시정지 위치를 먼저 저장 (재생 상태 동기화 useEffect가 재생을 막지 않도록)
     const savedPauseTime = pauseTimeRef.current;
+    console.log('[handleResume] 저장된 정지 위치 확인:', {
+      savedPauseTime,
+      pauseTimeRef: pauseTimeRef.current,
+      플레이어현재위치: youtubePlayerRef.current ? youtubePlayerRef.current.getCurrentTime() : null
+    });
+    
+    // pauseTimeRef를 null로 초기화 (재생 상태 동기화 useEffect가 재생을 막지 않도록)
     pauseTimeRef.current = null;
-    lastPlayAttemptRef.current = null; // 재생 시도 시간 리셋 (다시 재생 시작)
+    
+    // 재생 재개 시도 플래그 설정 (onStateChange와 재생 상태 동기화 useEffect가 pauseTimeRef를 설정하지 않도록)
+    const resumeStartTime = Date.now();
+    isResumingRef.current = true;
+    resumeStartTimeRef.current = resumeStartTime;
+    
+    // 재생 시도 시간을 먼저 설정하여 재생 상태 동기화 useEffect가 재생을 막지 않도록 함
+    lastPlayAttemptRef.current = resumeStartTime;
+    
+    // 재생 재개 시 재생 위치를 서버에 전송 (재생 시간 동기화를 위해)
+    // 정지된 위치(savedPauseTime)를 우선적으로 사용
+    const getCurrentPosition = () => {
+      try {
+        if (savedPauseTime !== null && savedPauseTime > 0) {
+          console.log('[handleResume] 정지된 위치 사용:', savedPauseTime, '초');
+          return savedPauseTime;
+        } else if (youtubePlayerRef.current) {
+          const currentTime = youtubePlayerRef.current.getCurrentTime();
+          console.log('[handleResume] 플레이어 현재 위치 사용:', currentTime, '초');
+          return currentTime;
+        }
+      } catch (e) {
+        console.log('[handleResume] 재생 위치 가져오기 오류:', e);
+      }
+      console.log('[handleResume] 재생 위치를 가져올 수 없어 0 사용');
+      return 0;
+    };
+    
+    const resumePosition = getCurrentPosition();
+    console.log('[handleResume] 최종 재생 재개 위치:', {
+      resumePosition,
+      savedPauseTime,
+      사용된위치: savedPauseTime !== null && savedPauseTime > 0 ? '정지된위치' : '플레이어현재위치'
+    });
+    
+    // '서버 장치로 듣기' 모드에서만 서버에 재생 위치 전송 및 재생 재개 요청
+    if (!localPlayMode && window.socket && music && resumePosition > 0) {
+      // 먼저 재생 위치를 서버에 전송 (서버에서 playStartTime 계산을 위해)
+      window.socket.emit('updatePlaybackPosition', {
+        position: resumePosition,
+        videoId: music.videoId
+      });
+      console.log('[handleResume] 재생 재개 시점 재생 위치 서버 전송:', resumePosition, '초');
+      
+      // 재생 위치가 서버에서 처리될 시간을 주기 위해 약간의 지연 후 재생 재개 요청
+      // 서버에서 updatePlaybackPosition을 처리하고 currentPlaybackPosition을 업데이트한 후
+      // resumeMusic에서 playStartTime을 계산할 수 있도록 충분한 지연 필요
+      setTimeout(() => {
+        if (!localPlayMode && window.socket) {
+          console.log('[handleResume] 재생 재개 요청 전송 (서버에서 playStartTime 재설정, 전송된 위치:', resumePosition, '초)');
+          onResume();
+        }
+      }, 200); // 200ms 지연으로 서버에서 updatePlaybackPosition 처리 시간 확보
+    } else if (!localPlayMode) {
+      // 재생 위치가 0이거나 없어도 재생 재개 요청
+      onResume();
+      console.log('[handleResume] 재생 재개 요청 전송 (재생 위치 없음)');
+    }
+    
+    // '내 장치로 듣기' 모드: 로컬 상태만 업데이트
+    if (localPlayMode && !hasControl) {
+      setLocalIsPlaying(true);
+      console.log('[handleResume] 내 장치로 듣기 모드 - 로컬 상태만 업데이트');
+    }
     
     // 일시정지된 위치가 있으면 그 위치에서 재생
     if (savedPauseTime !== null) {
@@ -1432,13 +1690,101 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
         setTimeout(() => {
           if (youtubePlayerRef.current && typeof youtubePlayerRef.current.playVideo === 'function') {
             try {
-              const currentState = youtubePlayerRef.current.getPlayerState();
-              if (currentState !== window.YT.PlayerState.PLAYING) {
-                const now = Date.now();
-                lastPlayAttemptRef.current = now;
-              youtubePlayerRef.current.playVideo();
-              console.log('[handleResume] 재생 시도 완료');
+              // seekTo 후 현재 위치 확인 (정확히 정지된 위치인지 확인)
+              const currentPosition = youtubePlayerRef.current.getCurrentTime();
+              const positionDiff = Math.abs(currentPosition - savedPauseTime);
+              
+              // 위치가 0.5초 이상 차이나면 다시 seekTo 시도
+              if (positionDiff > 0.5) {
+                console.log('[handleResume] 위치 불일치 감지, 다시 seekTo:', {
+                  저장된위치: savedPauseTime,
+                  현재위치: currentPosition,
+                  차이: positionDiff
+                });
+                youtubePlayerRef.current.seekTo(savedPauseTime, true);
+                // 다시 seekTo 후 약간의 지연
+                setTimeout(() => {
+                  const currentState = youtubePlayerRef.current.getPlayerState();
+                  if (currentState !== window.YT.PlayerState.PLAYING) {
+                    lastPlayAttemptRef.current = Date.now();
+                    youtubePlayerRef.current.playVideo();
+                    console.log('[handleResume] 재생 시도 완료 (위치 재조정 후)');
+                  }
+                }, 100);
+              } else {
+                const currentState = youtubePlayerRef.current.getPlayerState();
+                if (currentState !== window.YT.PlayerState.PLAYING) {
+                  // 재생 시도 시간 업데이트
+                  lastPlayAttemptRef.current = Date.now();
+                  youtubePlayerRef.current.playVideo();
+                  console.log('[handleResume] 재생 시도 완료');
+                }
               }
+              
+              // 재생이 시작되었는지 확인 (약간의 지연 후)
+              setTimeout(() => {
+                if (youtubePlayerRef.current) {
+                  const stateAfterPlay = youtubePlayerRef.current.getPlayerState();
+                  // 재생 시작 후에도 정지된 위치를 확인하여 정확히 그 위치에서 재생되도록 함
+                  if (stateAfterPlay === window.YT.PlayerState.PLAYING) {
+                    const actualPosition = youtubePlayerRef.current.getCurrentTime();
+                    const positionDiffAfterPlay = Math.abs(actualPosition - savedPauseTime);
+                    
+                    // 위치가 1초 이상 차이나면 다시 seekTo 시도
+                    if (positionDiffAfterPlay > 1.0) {
+                      console.log('[handleResume] 재생 후 위치 불일치 감지, 다시 seekTo:', {
+                        저장된위치: savedPauseTime,
+                        실제위치: actualPosition,
+                        차이: positionDiffAfterPlay
+                      });
+                      youtubePlayerRef.current.seekTo(savedPauseTime, true);
+                    } else {
+                      console.log('[handleResume] 재생 성공 확인, 위치 정확:', {
+                        저장된위치: savedPauseTime,
+                        실제위치: actualPosition,
+                        차이: positionDiffAfterPlay
+                      });
+                    }
+                    // 재생 성공 시 플래그 해제
+                    isResumingRef.current = false;
+                    resumeStartTimeRef.current = null;
+                  } else if (stateAfterPlay === window.YT.PlayerState.PAUSED) {
+                      // 여전히 일시정지 상태이면 다시 재생 시도
+                      const retryNow = Date.now();
+                      const timeSinceLastAttempt = lastPlayAttemptRef.current ? retryNow - lastPlayAttemptRef.current : Infinity;
+                      if (timeSinceLastAttempt > 500) {
+                        console.log('[handleResume] 재생이 시작되지 않음, 재시도');
+                        lastPlayAttemptRef.current = retryNow;
+                        youtubePlayerRef.current.playVideo();
+                        
+                        // 재시도 후에도 확인
+                        setTimeout(() => {
+                          if (youtubePlayerRef.current) {
+                            const stateAfterRetry = youtubePlayerRef.current.getPlayerState();
+                            if (stateAfterRetry === window.YT.PlayerState.PLAYING) {
+                              console.log('[handleResume] 재시도 후 재생 성공');
+                              isResumingRef.current = false;
+                            } else {
+                              // 재시도 실패 시에도 플래그 해제 (최대 5초 후)
+                              setTimeout(() => {
+                                isResumingRef.current = false;
+                                resumeStartTimeRef.current = null;
+                                console.log('[handleResume] 재생 재개 시도 플래그 해제 (타임아웃)');
+                              }, 5000);
+                            }
+                          }
+                        }, 500);
+                      } else {
+                        // 재시도 불가 시 플래그 해제 (최대 5초 후)
+                        setTimeout(() => {
+                          isResumingRef.current = false;
+                          resumeStartTimeRef.current = null;
+                          console.log('[handleResume] 재생 재개 시도 플래그 해제 (재시도 불가)');
+                        }, 5000);
+                      }
+                    }
+                  }
+                }, 500);
             } catch (e) {
               console.log('[handleResume] 재생 시도 오류:', e);
               lastPlayAttemptRef.current = null; // 오류 발생 시 리셋
@@ -1456,10 +1802,57 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
         if (typeof youtubePlayerRef.current.playVideo === 'function') {
           const currentState = youtubePlayerRef.current.getPlayerState();
           if (currentState !== window.YT.PlayerState.PLAYING) {
-            const now = Date.now();
-            lastPlayAttemptRef.current = now;
-          youtubePlayerRef.current.playVideo();
-          console.log('[handleResume] 재생 시도 완료');
+            // 재생 시도 시간 업데이트
+            lastPlayAttemptRef.current = Date.now();
+            youtubePlayerRef.current.playVideo();
+            console.log('[handleResume] 재생 시도 완료');
+            
+            // 재생이 시작되었는지 확인 (약간의 지연 후)
+            setTimeout(() => {
+              if (youtubePlayerRef.current) {
+                const stateAfterPlay = youtubePlayerRef.current.getPlayerState();
+                if (stateAfterPlay === window.YT.PlayerState.PLAYING) {
+                  console.log('[handleResume] 재생 성공 확인');
+                  // 재생 성공 시 플래그 해제
+                  isResumingRef.current = false;
+                  resumeStartTimeRef.current = null;
+                } else if (stateAfterPlay === window.YT.PlayerState.PAUSED) {
+                  // 여전히 일시정지 상태이면 다시 재생 시도
+                  const retryNow = Date.now();
+                  const timeSinceLastAttempt = lastPlayAttemptRef.current ? retryNow - lastPlayAttemptRef.current : Infinity;
+                  if (timeSinceLastAttempt > 500) {
+                    console.log('[handleResume] 재생이 시작되지 않음, 재시도');
+                    lastPlayAttemptRef.current = retryNow;
+                    youtubePlayerRef.current.playVideo();
+                    
+                    // 재시도 후에도 확인
+                    setTimeout(() => {
+                      if (youtubePlayerRef.current) {
+                        const stateAfterRetry = youtubePlayerRef.current.getPlayerState();
+                        if (stateAfterRetry === window.YT.PlayerState.PLAYING) {
+                          console.log('[handleResume] 재시도 후 재생 성공');
+                          isResumingRef.current = false;
+                        } else {
+                          // 재시도 실패 시에도 플래그 해제 (최대 5초 후)
+                          setTimeout(() => {
+                            isResumingRef.current = false;
+                            resumeStartTimeRef.current = null;
+                            console.log('[handleResume] 재생 재개 시도 플래그 해제 (타임아웃)');
+                          }, 5000);
+                        }
+                      }
+                    }, 500);
+                  } else {
+                    // 재시도 불가 시 플래그 해제 (최대 5초 후)
+                    setTimeout(() => {
+                      isResumingRef.current = false;
+                      resumeStartTimeRef.current = null;
+                      console.log('[handleResume] 재생 재개 시도 플래그 해제 (재시도 불가)');
+                    }, 5000);
+                  }
+                }
+              }
+            }, 500);
           }
         }
       } catch (e) {
@@ -1468,9 +1861,30 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
       }
     }
     
-    // 서버에 재생 요청
-    console.log('[handleResume] 서버에 재생 요청 전송');
-    onResume();
+    // '서버 장치로 듣기' 모드에서만 서버에 재생 요청 (재생 위치 전송 후 약간의 지연을 두어 서버에서 위치를 받을 수 있도록)
+    if (!localPlayMode) {
+      setTimeout(() => {
+        console.log('[handleResume] 서버에 재생 요청 전송');
+        onResume();
+        // 서버 상태 업데이트 후 플래그 해제 (최대 5초 후 안전장치)
+        setTimeout(() => {
+          if (isResumingRef.current) {
+            isResumingRef.current = false;
+            resumeStartTimeRef.current = null;
+            console.log('[handleResume] 재생 재개 시도 플래그 해제 (서버 요청 후 타임아웃)');
+          }
+        }, 5000);
+      }, 100); // 100ms 지연으로 재생 위치가 서버에 먼저 전달되도록 함
+    } else {
+      // 로컬 모드에서도 플래그 해제 (최대 5초 후 안전장치)
+      setTimeout(() => {
+        if (isResumingRef.current) {
+          isResumingRef.current = false;
+          resumeStartTimeRef.current = null;
+          console.log('[handleResume] 재생 재개 시도 플래그 해제 (로컬 모드 타임아웃)');
+        }
+      }, 5000);
+    }
   };
 
   // 재생 상태 동기화 (서버 제어에 따라 - 강제 동기화, 제어권 있는 곳에서만)
@@ -1582,12 +1996,29 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
         // 또는 로컬 재생 모드이고 localIsPlaying이 true이면 재생
         // 단, 일시정지 위치가 저장되어 있으면 사용자가 의도적으로 일시정지한 것이므로 자동 재생하지 않음
         // 단, 서버가 재생 중이면 pauseTimeRef를 초기화하여 재생 가능하게 함
+        // 단, 재생 재개 시도 중이거나 최근 재생 시도가 있었으면 pauseTimeRef를 초기화하여 재생 가능하게 함 (handleResume 또는 YouTube controls로 재생한 경우)
         if ((isPlaying && hasControl) || (localPlayMode && localIsPlaying)) {
+          // 재생 재개 시도 중이거나 최근 재생 시도가 있었으면 pauseTimeRef 초기화 (handleResume 또는 YouTube controls로 재생한 경우)
+          // 이는 handleResume에서 재생을 시도한 경우를 명시적으로 처리하기 위함
+          const now = Date.now();
+          const timeSinceLastAttempt = lastPlayAttemptRef.current ? now - lastPlayAttemptRef.current : Infinity;
+          const timeSinceResumeStart = resumeStartTimeRef.current ? now - resumeStartTimeRef.current : Infinity;
+          
+          // 재생 재개 시도 중이거나 재생 재개 시작 후 5초 이내이거나 최근 재생 시도가 있었으면 pauseTimeRef 초기화
+          if (isResumingRef.current || timeSinceResumeStart < 5000 || (timeSinceLastAttempt < 2000 && pauseTimeRef.current !== null)) {
+            console.log('[재생 상태 동기화] 재생 재개 시도 중 또는 최근 재생 시도 감지 - pauseTimeRef 초기화 (handleResume 또는 YouTube controls):', {
+              isResuming: isResumingRef.current,
+              timeSinceResumeStart: (timeSinceResumeStart / 1000).toFixed(2) + '초',
+              pauseTimeRef: pauseTimeRef.current,
+              timeSinceLastAttempt: (timeSinceLastAttempt / 1000).toFixed(2) + '초'
+            });
+            pauseTimeRef.current = null;
+          }
+          
           // 서버가 재생 중이면 pauseTimeRef 초기화 (재생 재개 시)
           if (isPlaying && pauseTimeRef.current !== null) {
             console.log('[재생 상태 동기화] 서버 재생 재개 - pauseTimeRef 초기화:', pauseTimeRef.current);
             pauseTimeRef.current = null;
-            lastPlayAttemptRef.current = null; // 재생 시도 시간도 리셋
           }
           
           if (pauseTimeRef.current !== null) {
@@ -1642,44 +2073,76 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
         // 서버가 중지했으면 일시정지 (모든 클라이언트에서 반영, 로컬 재생 모드여도 정지)
         if (!isPlaying) {
           // 서버가 일시정지 상태이면 모든 클라이언트에서 일시정지 (로컬 재생 모드여도 정지)
+          // 단, YouTube controls로 최근에 재생 시도가 있었으면 정지하지 않음 (서버 상태 변경 대기)
+          const now = Date.now();
+          const timeSinceLastAttempt = lastPlayAttemptRef.current ? now - lastPlayAttemptRef.current : Infinity;
+          const playerState = youtubePlayerRef.current.getPlayerState();
+          
+          // 최근 2초 이내에 재생 시도가 있었고 플레이어가 재생 중이면 정지하지 않음 (서버 상태 변경 대기)
+          if (timeSinceLastAttempt < 2000 && playerState === window.YT.PlayerState.PLAYING) {
+            console.log('[재생 상태 동기화] YouTube controls로 최근 재생 시도 감지 - 정지하지 않음 (서버 상태 변경 대기)', {
+              timeSinceLastAttempt: (timeSinceLastAttempt / 1000).toFixed(2) + '초',
+              playerState
+            });
+            return; // 정지하지 않고 종료
+          }
+          
           if (typeof youtubePlayerRef.current.pauseVideo === 'function') {
-            const playerState = youtubePlayerRef.current.getPlayerState();
             // 이미 일시정지 상태가 아니면 일시정지
+            // 단, YouTube controls로 최근에 재생 시도가 있었으면 정지하지 않음 (서버 상태 변경 대기)
             if (playerState !== window.YT.PlayerState.PAUSED && playerState !== window.YT.PlayerState.ENDED) {
+              // 최근 재생 시도가 있었으면 정지하지 않음 (서버 상태 변경 대기)
+              if (timeSinceLastAttempt < 2000) {
+                console.log('[재생 상태 동기화] YouTube controls로 최근 재생 시도 감지 - 정지하지 않음 (서버 상태 변경 대기)', {
+                  timeSinceLastAttempt: (timeSinceLastAttempt / 1000).toFixed(2) + '초',
+                  playerState
+                });
+                return; // 정지하지 않고 종료
+              }
+              
               youtubePlayerRef.current.pauseVideo();
               // 서버에서 일시정지할 때 pauseTimeRef를 설정하여 자동 재생을 막음
-              try {
-                const currentTime = youtubePlayerRef.current.getCurrentTime();
-                if (currentTime > 0 && pauseTimeRef.current === null) {
-                  pauseTimeRef.current = currentTime;
-                  console.log('[재생 상태 동기화] 서버 일시정지 상태 반영 - 일시정지 위치 저장:', currentTime, '초');
-                }
-              } catch (e) {
-                // 재생 위치를 가져올 수 없으면 최소한 pauseTimeRef를 설정하여 자동 재생을 막음
-                if (pauseTimeRef.current === null) {
-                  pauseTimeRef.current = 0; // 0으로 설정하여 자동 재생을 막음
-                  console.log('[재생 상태 동기화] 서버 일시정지 상태 반영 - 일시정지 위치를 가져올 수 없어 0으로 설정');
+              // 단, 재생 재개 시도 중이거나 최근 재생 시도가 있었으면 pauseTimeRef를 설정하지 않음 (서버 상태 변경 대기)
+              const timeSinceResumeStart = resumeStartTimeRef.current ? now - resumeStartTimeRef.current : Infinity;
+              if (!isResumingRef.current && timeSinceResumeStart >= 5000 && timeSinceLastAttempt >= 2000) {
+                try {
+                  const currentTime = youtubePlayerRef.current.getCurrentTime();
+                  if (currentTime > 0 && pauseTimeRef.current === null) {
+                    pauseTimeRef.current = currentTime;
+                    console.log('[재생 상태 동기화] 서버 일시정지 상태 반영 - 일시정지 위치 저장:', currentTime, '초');
+                  }
+                } catch (e) {
+                  // 재생 위치를 가져올 수 없으면 최소한 pauseTimeRef를 설정하여 자동 재생을 막음
+                  if (pauseTimeRef.current === null && !isResumingRef.current && timeSinceResumeStart >= 5000 && timeSinceLastAttempt >= 2000) {
+                    pauseTimeRef.current = 0; // 0으로 설정하여 자동 재생을 막음
+                    console.log('[재생 상태 동기화] 서버 일시정지 상태 반영 - 일시정지 위치를 가져올 수 없어 0으로 설정');
+                  }
                 }
               }
               console.log('[재생 상태 동기화] 서버 일시정지 상태 반영 - 플레이어 일시정지 실행', {
                 hasControl,
-                playerState
+                playerState,
+                timeSinceLastAttempt: (timeSinceLastAttempt / 1000).toFixed(2) + '초'
               });
             } else if (playerState === window.YT.PlayerState.PAUSED && pauseTimeRef.current === null) {
               // 이미 일시정지 상태인데 pauseTimeRef가 설정되지 않았으면 설정
-              try {
-                const currentTime = youtubePlayerRef.current.getCurrentTime();
-                if (currentTime > 0) {
-                  pauseTimeRef.current = currentTime;
-                  console.log('[재생 상태 동기화] 서버 일시정지 상태 반영 - 일시정지 위치 저장 (이미 일시정지 상태):', currentTime, '초');
-                } else {
-                  pauseTimeRef.current = 0; // 0으로 설정하여 자동 재생을 막음
-                  console.log('[재생 상태 동기화] 서버 일시정지 상태 반영 - 일시정지 위치를 가져올 수 없어 0으로 설정 (이미 일시정지 상태)');
-                }
-              } catch (e) {
-                if (pauseTimeRef.current === null) {
-                  pauseTimeRef.current = 0; // 0으로 설정하여 자동 재생을 막음
-                  console.log('[재생 상태 동기화] 서버 일시정지 상태 반영 - 일시정지 위치를 가져올 수 없어 0으로 설정 (이미 일시정지 상태)');
+              // 단, 재생 재개 시도 중이거나 최근 재생 시도가 있었으면 pauseTimeRef를 설정하지 않음 (서버 상태 변경 대기)
+              const timeSinceResumeStart = resumeStartTimeRef.current ? now - resumeStartTimeRef.current : Infinity;
+              if (!isResumingRef.current && timeSinceResumeStart >= 5000 && timeSinceLastAttempt >= 2000) {
+                try {
+                  const currentTime = youtubePlayerRef.current.getCurrentTime();
+                  if (currentTime > 0) {
+                    pauseTimeRef.current = currentTime;
+                    console.log('[재생 상태 동기화] 서버 일시정지 상태 반영 - 일시정지 위치 저장 (이미 일시정지 상태):', currentTime, '초');
+                  } else {
+                    pauseTimeRef.current = 0; // 0으로 설정하여 자동 재생을 막음
+                    console.log('[재생 상태 동기화] 서버 일시정지 상태 반영 - 일시정지 위치를 가져올 수 없어 0으로 설정 (이미 일시정지 상태)');
+                  }
+                } catch (e) {
+                  if (pauseTimeRef.current === null && !isResumingRef.current && timeSinceResumeStart >= 5000) {
+                    pauseTimeRef.current = 0; // 0으로 설정하여 자동 재생을 막음
+                    console.log('[재생 상태 동기화] 서버 일시정지 상태 반영 - 일시정지 위치를 가져올 수 없어 0으로 설정 (이미 일시정지 상태):', e);
+                  }
                 }
               }
             }
@@ -1810,19 +2273,35 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
             
             // 서버도 재생 중이 아니거나, 실제로 재생이 끝났으면 다음 곡으로 이동
             // 단, 로컬 재생 모드에서는 서버에 알림하지 않음
-            if (!endedSentRef.current && window.socket && hasControl && !localPlayMode) {
+            // 단, 정지 상태(isPlaying === false)에서는 다음 곡으로 넘어가지 않음
+            // 단, 수동 다음 곡 전환(manualNextRef.current === true)인 경우는 허용
+            if (!endedSentRef.current && window.socket && hasControl && !localPlayMode && (isPlaying || manualNextRef.current)) {
               endedSentRef.current = true;
               console.log('[주기적 상태 확인] 재생 종료 상태 감지 - 다음 곡으로 이동 (모바일 백업 로직)', {
                 videoId: music?.videoId,
                 title: music?.title,
                 socketConnected: window.socket?.connected,
-                isPlaying
+                isPlaying,
+                manualNext: manualNextRef.current
               });
               window.socket.emit('musicEnded');
-            } else if (localPlayMode && !hasControl) {
-              // 로컬 재생 모드에서 재생 종료 시 다음 곡 대기
-              console.log('[주기적 상태 확인] 로컬 재생 종료 - 다음 곡 대기');
-              setLocalIsPlaying(false);
+              manualNextRef.current = false; // musicEnded 전송 후 수동 다음 곡 전환 플래그 리셋
+            } else {
+              // 정지 상태이거나 다른 이유로 musicEnded를 전송하지 않는 경우
+              if (!isPlaying && !manualNextRef.current) {
+                console.log('[주기적 상태 확인] 정지 상태 - musicEnded 전송하지 않음', {
+                  videoId: music?.videoId,
+                  title: music?.title,
+                  isPlaying,
+                  hasControl,
+                  localPlayMode,
+                  endedSent: endedSentRef.current
+                });
+              } else if (localPlayMode && !hasControl) {
+                // 로컬 재생 모드에서 재생 종료 시 다음 곡 대기
+                console.log('[주기적 상태 확인] 로컬 재생 종료 - 다음 곡 대기');
+                setLocalIsPlaying(false);
+              }
             }
             return; // ENDED 상태면 다른 동기화 로직 실행하지 않음
           }
@@ -1875,10 +2354,11 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
           // 모바일에서 loadVideoById 후 CUED 상태에서 재생이 시작되지 않을 수 있음
           // 단, 서버가 일시정지 상태가 아니고, 일시정지 위치가 저장되어 있지 않을 때만 재생
           // 단, 최근 재생 시도가 없을 때만 재생
-          if ((hasControl || localPlayMode) && playerState === window.YT.PlayerState.CUED && pauseTimeRef.current === null && (isPlaying || localPlayMode)) {
+          // 단, BUFFERING 상태가 아닐 때만 재생 (BUFFERING 중에는 재생 시도하지 않음)
+          if ((hasControl || localPlayMode) && playerState === window.YT.PlayerState.CUED && pauseTimeRef.current === null && (isPlaying || localPlayMode) && playerState !== window.YT.PlayerState.BUFFERING) {
             const now = Date.now();
             const timeSinceLastAttempt = lastPlayAttemptRef.current ? now - lastPlayAttemptRef.current : Infinity;
-            if (timeSinceLastAttempt > 500) {
+            if (timeSinceLastAttempt > 2000) { // 1000ms에서 2000ms로 증가 (재생 시도 빈도 더 감소)
             console.log('[주기적 상태 확인] CUED 상태 감지 - 재생 시도');
             try {
               if (typeof youtubePlayerRef.current.playVideo === 'function') {
@@ -1897,10 +2377,11 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
           // loadVideoById 후 UNSTARTED 상태에서 재생이 시작되지 않을 수 있음
           // 단, 서버가 일시정지 상태가 아니고, 일시정지 위치가 저장되어 있지 않을 때만 재생
           // 단, 최근 재생 시도가 없을 때만 재생
-          if ((hasControl || localPlayMode) && playerState === window.YT.PlayerState.UNSTARTED && pauseTimeRef.current === null && (isPlaying || localPlayMode)) {
+          // 단, BUFFERING 상태가 아닐 때만 재생 (BUFFERING 중에는 재생 시도하지 않음)
+          if ((hasControl || localPlayMode) && playerState === window.YT.PlayerState.UNSTARTED && pauseTimeRef.current === null && (isPlaying || localPlayMode) && playerState !== window.YT.PlayerState.BUFFERING) {
             const now = Date.now();
             const timeSinceLastAttempt = lastPlayAttemptRef.current ? now - lastPlayAttemptRef.current : Infinity;
-            if (timeSinceLastAttempt > 500) {
+            if (timeSinceLastAttempt > 2000) { // 1000ms에서 2000ms로 증가 (재생 시도 빈도 더 감소)
             console.log('[주기적 상태 확인] UNSTARTED 상태 감지 - 재생 시도');
             try {
               if (typeof youtubePlayerRef.current.playVideo === 'function') {
@@ -2091,7 +2572,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
         
         // '내 장치로 듣기' 모드이고 재생 중이면 즉시 동기화
         if (localPlayMode && !hasControl && playerReady && youtubePlayerRef.current && localIsPlaying &&
-            music && positionData.videoId === music.videoId && pauseTimeRef.current === null) {
+            music && positionData.videoId === music.videoId) {
           try {
             const myPosition = youtubePlayerRef.current.getCurrentTime();
             const serverPosition = positionData.position;
@@ -2114,32 +2595,133 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
               const playerState = youtubePlayerRef.current.getPlayerState();
               
               if (typeof youtubePlayerRef.current.seekTo === 'function') {
-                // seekTo만 호출 (자동 재생 방지)
+                // seekTo 호출 전에 pauseTimeRef를 초기화하여 재생을 허용
+                pauseTimeRef.current = null;
+                // 재생 시도 시간을 설정하여 재생 상태 동기화 useEffect가 재생을 막지 않도록 함
+                lastPlayAttemptRef.current = Date.now();
+                
+                // seekTo 호출
                 youtubePlayerRef.current.seekTo(adjustedServerPosition, true);
                 lastSyncTimeRef.current = Date.now(); // 동기화 시간 업데이트
                 
+                // seekTo 호출 후 자동 재생 보장
                 // 플레이어가 일시정지 상태이고 재생 중이어야 하면 재생 시작
-                // 단, pauseTimeRef가 설정되어 있으면 재생하지 않음
-                if (playerState === window.YT.PlayerState.PAUSED && pauseTimeRef.current === null) {
-                  setTimeout(() => {
-                    if (youtubePlayerRef.current && localIsPlaying && pauseTimeRef.current === null) {
-                      const stateAfterSeek = youtubePlayerRef.current.getPlayerState();
-                      if (stateAfterSeek === window.YT.PlayerState.PAUSED) {
-                        const now = Date.now();
-                        const timeSinceLastAttempt = lastPlayAttemptRef.current ? now - lastPlayAttemptRef.current : Infinity;
-                        if (timeSinceLastAttempt > 500) {
-                          lastPlayAttemptRef.current = now;
-                          youtubePlayerRef.current.playVideo();
-                          console.log('[내 장치로 듣기 - Seek 동기화] 일시정지 상태에서 재생 시작');
-                        }
+                setTimeout(() => {
+                  if (youtubePlayerRef.current && localIsPlaying && pauseTimeRef.current === null) {
+                    const stateAfterSeek = youtubePlayerRef.current.getPlayerState();
+                    if (stateAfterSeek === window.YT.PlayerState.PAUSED) {
+                      const now = Date.now();
+                      const timeSinceLastAttempt = lastPlayAttemptRef.current ? now - lastPlayAttemptRef.current : Infinity;
+                      if (timeSinceLastAttempt > 500) {
+                        lastPlayAttemptRef.current = now;
+                        youtubePlayerRef.current.playVideo();
+                        console.log('[내 장치로 듣기 - Seek 동기화] 일시정지 상태에서 재생 시작');
+                        
+                        // 재생이 시작되었는지 확인
+                        setTimeout(() => {
+                          if (youtubePlayerRef.current) {
+                            const stateAfterPlay = youtubePlayerRef.current.getPlayerState();
+                            if (stateAfterPlay === window.YT.PlayerState.PLAYING) {
+                              console.log('[내 장치로 듣기 - Seek 동기화] 재생 성공 확인');
+                            } else if (stateAfterPlay === window.YT.PlayerState.PAUSED) {
+                              // 여전히 일시정지 상태이면 다시 재생 시도
+                              const retryNow = Date.now();
+                              const timeSinceLastAttempt = lastPlayAttemptRef.current ? retryNow - lastPlayAttemptRef.current : Infinity;
+                              if (timeSinceLastAttempt > 500) {
+                                console.log('[내 장치로 듣기 - Seek 동기화] 재생이 시작되지 않음, 재시도');
+                                lastPlayAttemptRef.current = retryNow;
+                                youtubePlayerRef.current.playVideo();
+                              }
+                            }
+                          }
+                        }, 500);
                       }
                     }
-                  }, 300);
-                }
+                  }
+                }, 300);
               }
             }
           } catch (e) {
             console.log('[내 장치로 듣기 - Seek 동기화] 오류:', e);
+          }
+        }
+        
+        // 제어권 있는 클라이언트: seek 이벤트 수신 시 즉시 동기화
+        if (hasControl && !localPlayMode && playerReady && youtubePlayerRef.current && isPlaying &&
+            music && positionData.videoId === music.videoId) {
+          try {
+            const myPosition = youtubePlayerRef.current.getCurrentTime();
+            const serverPosition = positionData.position;
+            
+            // 네트워크 지연 보정
+            const delay = (Date.now() - positionData.timestamp) / 1000;
+            const adjustedServerPosition = serverPosition + delay;
+            
+            const difference = Math.abs(myPosition - adjustedServerPosition);
+            
+            // seek 이벤트는 차이가 0.5초 이상이면 즉시 동기화 (주기 제한 없이)
+            if (difference >= 0.5) {
+              console.log('[제어권 있음 - Seek 동기화] 즉시 동기화:', {
+                내위치: myPosition,
+                서버위치: adjustedServerPosition,
+                차이: difference
+              });
+              
+              // 플레이어 상태 확인
+              const playerState = youtubePlayerRef.current.getPlayerState();
+              
+              if (typeof youtubePlayerRef.current.seekTo === 'function') {
+                // seekTo 호출 전에 pauseTimeRef를 초기화하여 재생을 허용
+                pauseTimeRef.current = null;
+                // 재생 시도 시간을 설정하여 재생 상태 동기화 useEffect가 재생을 막지 않도록 함
+                lastPlayAttemptRef.current = Date.now();
+                
+                // seekTo 호출
+                youtubePlayerRef.current.seekTo(adjustedServerPosition, true);
+                lastSyncTimeForControlRef.current = Date.now();
+                // 동기화 후 전송 위치도 업데이트
+                lastSentPositionRef.current = adjustedServerPosition;
+                lastSentTimeRef.current = Date.now();
+                
+                // seekTo 호출 후 자동 재생 보장
+                // 플레이어가 일시정지 상태이면 재생 시작
+                setTimeout(() => {
+                  if (youtubePlayerRef.current && isPlaying && pauseTimeRef.current === null) {
+                    const stateAfterSeek = youtubePlayerRef.current.getPlayerState();
+                    if (stateAfterSeek === window.YT.PlayerState.PAUSED) {
+                      const now = Date.now();
+                      const timeSinceLastAttempt = lastPlayAttemptRef.current ? now - lastPlayAttemptRef.current : Infinity;
+                      if (timeSinceLastAttempt > 500) {
+                        lastPlayAttemptRef.current = now;
+                        youtubePlayerRef.current.playVideo();
+                        console.log('[제어권 있음 - Seek 동기화] 일시정지 상태에서 재생 시작');
+                        
+                        // 재생이 시작되었는지 확인
+                        setTimeout(() => {
+                          if (youtubePlayerRef.current) {
+                            const stateAfterPlay = youtubePlayerRef.current.getPlayerState();
+                            if (stateAfterPlay === window.YT.PlayerState.PLAYING) {
+                              console.log('[제어권 있음 - Seek 동기화] 재생 성공 확인');
+                            } else if (stateAfterPlay === window.YT.PlayerState.PAUSED) {
+                              // 여전히 일시정지 상태이면 다시 재생 시도
+                              const retryNow = Date.now();
+                              const timeSinceLastAttempt = lastPlayAttemptRef.current ? retryNow - lastPlayAttemptRef.current : Infinity;
+                              if (timeSinceLastAttempt > 500) {
+                                console.log('[제어권 있음 - Seek 동기화] 재생이 시작되지 않음, 재시도');
+                                lastPlayAttemptRef.current = retryNow;
+                                youtubePlayerRef.current.playVideo();
+                              }
+                            }
+                          }
+                        }, 500);
+                      }
+                    }
+                  }
+                }, 300);
+              }
+            }
+          } catch (e) {
+            console.log('[제어권 있음 - Seek 동기화] 오류:', e);
           }
         }
       }
@@ -2709,7 +3291,10 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
           {isAdmin && (
             hasControl ? (
               <button 
-                onClick={onPlayNext} 
+                onClick={() => {
+                  manualNextRef.current = true; // 수동 다음 곡 전환 플래그 설정
+                  onPlayNext();
+                }} 
                 className="next-btn-compact"
                 title="다음 음악 재생"
               >

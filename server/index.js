@@ -256,7 +256,8 @@ io.on('connection', (socket) => {
       // 제어권이 있을 때만 자동 재생 시도
       // 제어권이 없어도 음악 신청은 가능 (대기열에만 추가)
       const hasControlForPlay = !!controlSessionId;
-      const isIdle = !isPlaying || !currentPlaying; // 유휴 상태 체크
+      // 유휴 상태 체크: 재생 중이 아니고 현재 재생 중인 음악도 없을 때만 (정지 상태 제외)
+      const isIdle = !isPlaying && !currentPlaying;
       
       console.log('[requestMusic] 음악 추가 완료, 재생 조건 확인:', {
         isPlaying,
@@ -401,14 +402,25 @@ io.on('connection', (socket) => {
       return;
     }
     
+    // 정지 상태에서는 다음 곡으로 넘어가지 않음
+    if (!isPlaying) {
+      console.log('[musicEnded] 정지 상태 - 다음 곡으로 넘어가지 않음', {
+        isPlaying,
+        currentPlaying: currentPlaying?.title,
+        queueLength: queue.length
+      });
+      // 정지 상태에서는 musicEnded를 무시하고 종료
+      return;
+    }
+    
     // 대기열이 있으면 즉시 다음 곡 재생 (음악이 끝나면 자동으로 다음 곡 재생)
-    // 어떤 상태든 무조건 다음 곡으로 넘어가야 함
+    // 재생 중일 때만 다음 곡으로 넘어감
     console.log(`[musicEnded] 재생 종료 감지 - 즉시 다음 곡 재생 (대기열: ${queue.length}개)`);
     console.log(`[musicEnded] 대기열 내용:`, queue.map(m => ({ id: m.id, title: m.title })));
     
     // playNextMusic 내부에서 isProcessingNext를 설정하므로 여기서는 설정하지 않음
-    // force=true로 호출하여 어떤 상태든 무조건 다음 곡 재생
-    console.log('[musicEnded] playNextMusic 호출 시작 (어떤 상태든 무조건 실행, force=true)');
+    // force=true로 호출하여 재생 중일 때만 다음 곡 재생
+    console.log('[musicEnded] playNextMusic 호출 시작 (재생 중일 때만 실행, force=true)');
     try {
       playNextMusic(true); // force=true로 강제 실행
       console.log('[musicEnded] playNextMusic 호출 완료');
@@ -424,6 +436,26 @@ io.on('connection', (socket) => {
     const clientInfo = connectedClients.get(socket.id);
     if (clientInfo && clientInfo.isAdmin && hasControlBySocketId(socket.id)) {
       isPlaying = false;
+      // 정지 시 타이머 취소 (정지 상태에서 시간이 지나도 다음 곡으로 넘어가지 않도록)
+      if (autoPlayTimer) {
+        console.log('[pauseMusic] 정지 요청 - 자동 재생 타이머 취소');
+        clearTimeout(autoPlayTimer);
+        autoPlayTimer = null;
+      }
+      // 정지 시 재생 위치 브로드캐스트 중지 (정지 상태에서 재생 시간이 진행되지 않도록)
+      stopPlaybackPositionBroadcast();
+      // 정지 시 playStartTime을 null로 설정하여 재생 시간이 진행되지 않도록 함
+      // 재생 재개 시 현재 재생 위치를 기준으로 playStartTime을 다시 설정
+      if (playStartTime && currentPlaybackPosition && currentPlaying) {
+        // 정지 시점의 재생 위치 저장 (재생 재개 시 사용)
+        const pausedPosition = currentPlaybackPosition.position;
+        console.log('[pauseMusic] 정지 시점 재생 위치 저장:', pausedPosition, '초');
+        // playStartTime을 null로 설정하여 재생 시간 진행 중지
+        playStartTime = null;
+      } else {
+        playStartTime = null;
+        console.log('[pauseMusic] playStartTime을 null로 설정 (재생 시간 진행 중지)');
+      }
       io.emit('musicPaused');
       console.log('음악 일시정지 (제어권 보유자)');
     } else {
@@ -437,6 +469,25 @@ io.on('connection', (socket) => {
     if (clientInfo && clientInfo.isAdmin && hasControlBySocketId(socket.id)) {
       if (currentPlaying) {
         isPlaying = true;
+        // 재생 재개 시 playStartTime을 현재 재생 위치를 기준으로 다시 설정
+        // 클라이언트에서 전송한 재생 위치를 기준으로 playStartTime 계산
+        if (currentPlaybackPosition && currentPlaybackPosition.videoId === currentPlaying.videoId) {
+          // 현재 재생 위치를 기준으로 playStartTime 설정
+          // playStartTime = 현재시간 - 재생위치(초)
+          const currentPosition = currentPlaybackPosition.position;
+          playStartTime = Date.now() - (currentPosition * 1000);
+          console.log('[resumeMusic] 재생 재개 - playStartTime 재설정:', {
+            currentPosition,
+            playStartTime: new Date(playStartTime).toISOString(),
+            calculatedFrom: 'currentPlaybackPosition'
+          });
+        } else {
+          // 재생 위치 정보가 없으면 현재 시간을 기준으로 설정
+          playStartTime = Date.now();
+          console.log('[resumeMusic] 재생 재개 - playStartTime을 현재 시간으로 설정 (재생 위치 정보 없음)');
+        }
+        // 재생 위치 브로드캐스트 재시작
+        startPlaybackPositionBroadcast();
         io.emit('musicResumed', currentPlaying);
         console.log('음악 재생 재개 (제어권 보유자)');
       }
