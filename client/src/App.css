@@ -43,8 +43,8 @@
 
 .control-status.has-control {
   background: var(--bg-secondary);
-  color: #52c41a;
-  border-color: #52c41a;
+  color: #13c2c2;
+  border-color: #13c2c2;
 }
 
 .control-status.no-control {
