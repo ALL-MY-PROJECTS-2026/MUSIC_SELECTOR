@@ -1,161 +1,140 @@
-# 🎵 음악 선곡기 (Music Selector)
+# 음악 선곡기 (Music Selector)
 
-실시간으로 여러 사용자가 음악을 요청하고, 유튜브에서 검색하여 대기열로 관리하는 웹 애플리케이션입니다.
+여러 사용자가 동시에 음악을 요청하고, 유튜브 검색 결과를 바탕으로 대기열을 관리하며 실시간으로 동기화하는 웹 애플리케이션입니다. 클라이언트 측에서 문장 임베딩 모델을 사용해 제목·메타 정보 기반 유사도 추천을 제공합니다.
 
-## ✨ 주요 기능
+## 프로젝트 개요
 
-- 🎶 **실시간 음악 요청**: 여러 사용자가 동시에 음악을 요청할 수 있습니다
-- 🔍 **유튜브 자동 검색**: 음악 제목을 입력하면 자동으로 유튜브에서 검색합니다
-- 📋 **대기열 관리**: 요청된 음악들을 대기열로 관리하고 순서대로 재생합니다
-- 🔄 **실시간 동기화**: Socket.io를 사용하여 모든 클라이언트가 실시간으로 동기화됩니다
-- 🎬 **자동 재생**: 현재 재생 중인 음악이 끝나면 다음 음악이 자동으로 재생됩니다
+- **실시간 협업**: Socket.io로 접속자·대기열·재생 상태·좋아요 등이 공유됩니다.
+- **유튜브 연동**: `youtube-search-api`로 검색하고, 필요 시 YouTube Data API(환경 변수 설정 시)로 메타데이터를 보강합니다.
+- **재생 제어**: 한 세션에 제어권을 두어 재생·스킵·관리자 기능 등을 조정할 수 있습니다.
+- **AI 추천(클라이언트)**: 브라우저에서 `Transformers.js`로 다국어 임베딩 모델을 로드하고, 코사인 유사도와 규칙 기반 점수(인기도·아티스트 매칭 등)를 결합해 추천 후보를 만듭니다.
 
-## 🛠 기술 스택
+백엔드는 추론을 수행하지 않으며, 임베딩·유사도 계산은 사용자 브라우저에서 이루어집니다.
+
+## 기술 스택
 
 ### 백엔드
-- **Express.js**: 웹 서버 프레임워크
-- **Socket.io**: 실시간 양방향 통신
-- **youtube-search-api**: 유튜브 검색 API
+
+- **Express.js**: HTTP API 및 정적 연동
+- **Socket.io**: 실시간 이벤트
+- **youtube-search-api**: 유튜브 검색
+- **cors**: 교차 출처 요청 허용
 
 ### 프론트엔드
-- **React**: UI 라이브러리
-- **Socket.io-client**: 실시간 통신 클라이언트
-- **CSS3**: 모던한 UI 스타일링
 
-## 📁 프로젝트 구조
+- **React 18**: UI
+- **Socket.io-client**: 실시간 동기화
+- **@xenova/transformers**: 브라우저 내 임베딩 모델 실행
+- **CSS**: 앱 스타일(다크/라이트 테마 등)
+
+## 프로젝트 구조
 
 ```
 MUSIC_SELECTOR/
-├── server/                 # 백엔드 서버
-│   ├── index.js           # Express + Socket.io 서버
+├── server/
+│   ├── index.js                 # Express + Socket.io, 대기열·좋아요·관리자 등
 │   ├── services/
-│   │   ├── queueManager.js    # 대기열 관리
-│   │   └── youtubeService.js  # 유튜브 검색 서비스
+│   │   ├── queueManager.js      # 대기열 관리
+│   │   └── youtubeService.js    # 유튜브 검색·보조 API
 │   └── package.json
-├── client/                 # 프론트엔드 React 앱
+├── client/
 │   ├── public/
+│   │   └── index.html
 │   ├── src/
-│   │   ├── App.js         # 메인 앱 컴포넌트
+│   │   ├── App.js               # 소켓 연결, 제어권·테마·레이아웃
 │   │   ├── components/
-│   │   │   ├── MusicRequestForm.jsx  # 음악 요청 폼
-│   │   │   ├── CurrentPlaying.jsx    # 현재 재생 중
-│   │   │   └── QueueList.jsx         # 대기열 목록
-│   │   └── index.js
+│   │   │   ├── ai/
+│   │   │   │   ├── AutoRecommendationButton.jsx
+│   │   │   │   ├── RecommendationButton.jsx
+│   │   │   │   ├── RecommendationModal.jsx
+│   │   │   │   └── RecommendationList.jsx
+│   │   │   ├── ClientList.jsx
+│   │   │   ├── CurrentPlaying.jsx
+│   │   │   ├── LikedMusicList.jsx
+│   │   │   ├── MusicRequestForm.jsx
+│   │   │   ├── PlaylistModal.jsx
+│   │   │   └── QueueList.jsx
+│   │   ├── services/ai/
+│   │   │   ├── modelLoader.js          # Transformers.js 모델 로드
+│   │   │   ├── embeddingService.js     # 텍스트 임베딩
+│   │   │   ├── similarityCalculator.js
+│   │   │   └── recommendationService.js
+│   │   ├── utils/ai/
+│   │   │   └── indexedDB.js            # 앱용 IndexedDB·캐시 유틸
+│   │   ├── index.js
+│   │   └── App.css
 │   └── package.json
-└── package.json           # 루트 패키지
+├── test_ai_recommendation.js    # AI 추천 관련 스크립트(루트)
+├── package.json                 # concurrently로 server/client 동시 실행
+└── README.md
 ```
 
-## 🚀 설치 및 실행 방법
+## AI 관련 기술
 
-### 1. 의존성 설치
+| 구분 | 기술·구성 요소 | 역할 |
+|------|----------------|------|
+| 브라우저 ML 런타임 | `@xenova/transformers` (Transformers.js) | Hugging Face 계열 모델을 ONNX 등으로 브라우저에서 로드·실행 |
+| 임베딩 모델 | `Xenova/multilingual-e5-small` | `feature-extraction` 파이프라인, 다국어 문장 벡터(평균 풀링·정규화), 양자화 모델 옵션 |
+| 임베딩 API | `embeddingService.js` | 문자열 → `Float32Array` 임베딩, 메모리 캐시 |
+| 유사도·벡터 연산 | `similarityCalculator.js` | 코사인 유사도, 가중 평균 임베딩, 유클리드 거리 |
+| 추천 로직 | `recommendationService.js` | 임베딩 유사도와 좋아요·대기열·검색 순위·조회수·아티스트 문자열 매칭 등을 조합한 점수화 |
+| 로컬 저장소 | IndexedDB | Transformers.js가 브라우저 캐시로 모델 파일을 재사용; `utils/ai/indexedDB.js`는 앱 DB·TTL 캐시 등 |
 
-루트 디렉토리에서 모든 패키지를 한 번에 설치:
+## 설치 및 실행
+
+### 의존성 설치
+
+루트에서:
 
 ```bash
 npm run install-all
 ```
 
-또는 각각 설치:
+### 개발 실행 (권장)
 
-```bash
-# 루트 패키지 설치
-npm install
-
-# 서버 패키지 설치
-cd server
-npm install
-
-# 클라이언트 패키지 설치
-cd ../client
-npm install
-```
-
-### 2. 서버 실행
-
-#### 방법 1: 동시 실행 (권장)
-루트 디렉토리에서 서버와 클라이언트를 동시에 실행:
+루트에서 서버와 클라이언트 동시 실행:
 
 ```bash
 npm run dev
 ```
 
-#### 방법 2: 개별 실행
+### 개별 실행
 
-**서버 실행** (포트 5000):
+서버(기본 포트 5000):
+
 ```bash
 cd server
 npm start
 ```
 
-**클라이언트 실행** (포트 3000):
+클라이언트(기본 포트 3000):
+
 ```bash
 cd client
 npm start
 ```
 
-### 3. 접속
+### 접속
 
-#### 로컬 접속
-브라우저에서 `http://localhost:3000`으로 접속합니다.
+- 로컬: `http://localhost:3000`
+- LAN에서 접속 시: `http://[서버 PC의 IPv4]:3000` 클라이언트는 동일 호스트의 5000 포트로 소켓 연결을 시도합니다.
+- 다른 주소로 백엔드를 쓰려면 `client/.env`에 `REACT_APP_SERVER_URL=http://[호스트]:5000` 을 설정합니다.
 
-#### 다른 컴퓨터에서 접속
-1. **서버 PC의 IP 주소 확인**
-   - Windows: 명령 프롬프트에서 `ipconfig` 실행
-   - IPv4 주소 확인 (예: `192.168.0.100`)
+## 환경 변수
 
-2. **방화벽 설정**
-   - Windows 방화벽에서 포트 5000과 3000 허용
-   - 또는 개발 중에는 방화벽을 일시적으로 비활성화
+| 변수 | 적용 위치 | 설명 |
+|------|-----------|------|
+| `PORT` | 서버 | HTTP/Socket 포트 (기본 5000) |
+| `HOST` | 서버 | 바인드 주소 (기본 0.0.0.0) |
+| `ADMIN_PASSWORD` | 서버 | 관리자 인증 비밀번호 (미설정 시 기본값 사용) |
+| `YOUTUBE_API_KEY` | 서버 | YouTube Data API 키(선택). 없으면 검색·보조 기능 일부가 제한될 수 있음 |
+| `REACT_APP_SERVER_URL` | 클라이언트 | 백엔드 베이스 URL 오버라이드 |
 
-3. **다른 컴퓨터에서 접속**
-   - 브라우저에서 `http://[서버IP]:3000` 접속
-   - 예: `http://192.168.0.100:3000`
-   - 클라이언트가 자동으로 같은 IP의 5000 포트로 서버에 연결됩니다
+## 주의사항
 
-4. **환경 변수로 서버 주소 지정 (선택사항)**
-   - `client` 폴더에 `.env` 파일 생성
-   - `REACT_APP_SERVER_URL=http://[서버IP]:5000` 추가
-   - 예: `REACT_APP_SERVER_URL=http://192.168.0.100:5000`
+- 유튜브 검색·API는 사용량·정책 제한이 있을 수 있습니다.
+- AI 모델은 최초 로드 시 네트워크로 가중치를 받으며, 브라우저와 기기 성능에 따라 지연이 클 수 있습니다.
 
-## 📖 사용 방법
-
-1. **음악 요청**
-   - 상단의 입력창에 음악 제목이나 아티스트 이름을 입력합니다
-   - "요청하기" 버튼을 클릭합니다
-   - 서버가 유튜브에서 자동으로 검색하여 대기열에 추가합니다
-
-2. **재생 확인**
-   - 왼쪽 패널에서 현재 재생 중인 음악을 확인할 수 있습니다
-   - 유튜브 플레이어가 자동으로 재생됩니다
-
-3. **대기열 관리**
-   - 오른쪽 패널에서 대기 중인 음악 목록을 확인할 수 있습니다
-   - ✕ 버튼을 클릭하여 대기열에서 제거할 수 있습니다
-
-4. **다음 음악 재생**
-   - "다음 음악 재생" 버튼을 클릭하면 현재 음악을 건너뛰고 다음 음악을 재생합니다
-
-## 🔧 환경 변수
-
-현재는 기본 설정으로 동작합니다. 필요시 다음 환경 변수를 설정할 수 있습니다:
-
-- `PORT`: 서버 포트 (기본값: 5000)
-
-## ⚠️ 주의사항
-
-- 유튜브 검색 API는 일일 할당량 제한이 있을 수 있습니다
-- 여러 사용자가 동시에 접속하여 사용할 수 있습니다
-- 모든 클라이언트는 실시간으로 동기화됩니다
-
-## 🎯 향후 개선 사항
-
-- [ ] 사용자 인증 시스템
-- [ ] 음악 좋아요/싫어요 기능
-- [ ] 대기열 순서 변경 기능
-- [ ] 재생 시간 표시
-- [ ] 음악 히스토리 저장
-- [ ] 관리자 기능 (대기열 강제 삭제 등)
-
-## 📝 라이선스
+## 라이선스
 
 ISC
