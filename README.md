@@ -80,6 +80,21 @@ MUSIC_SELECTOR/
 | 추천 로직 | `recommendationService.js` | 임베딩 유사도와 좋아요·대기열·검색 순위·조회수·아티스트 문자열 매칭 등을 조합한 점수화 |
 | 로컬 저장소 | IndexedDB | Transformers.js가 브라우저 캐시로 모델 파일을 재사용; `utils/ai/indexedDB.js`는 앱 DB·TTL 캐시 등 |
 
+### @xenova/transformers (Transformers.js) 상세
+
+| 항목 | 설명 |
+|------|------|
+| 정체성 | Hugging Face의 **Transformers** 패턴을 자바스크립트에서 쓰기 위한 라이브러리(브랜드명 **Transformers.js**). NPM 패키지명은 `@xenova/transformers`이다. |
+| 추론 백엔드 | 브라우저에서는 주로 **ONNX** 형식 가중치와 **ONNX Runtime Web**을 사용하며, **WebAssembly** 등으로 CPU 추론을 수행한다(별도 GPU 가속 없이도 동작). |
+| 모델 소스 | 기본적으로 **원격 Hugging Face Hub**에서 모델 파일을 가져온다. 이 프로젝트는 `env.allowLocalModels = false`, `env.allowRemoteModels = true`로 로컬 파일 대신 원격 로드를 사용한다(`client/src/services/ai/modelLoader.js`). |
+| 캐시 | 브라우저 환경에서 **IndexedDB 등 브라우저 스토리지**에 모델을 캐시해 두 번째 방문부터 로드를 줄인다. |
+| API 형태 | `pipeline(task, modelName, options)`으로 태스크별 파이프라인을 만든다. 이 앱은 **`feature-extraction`** 태스크로 문장 임베딩 벡터를 얻는다. |
+| 본 프로젝트 모델 | **`Xenova/multilingual-e5-small`**: 다국어 문장 임베딩용 소형 모델. 옵션으로 **`quantized: true`**(양자화 가중치)를 켜 용량·속도를 우선한다. |
+| 임베딩 호출 | `embeddingService.js`에서 파이프라인에 문자열을 넘길 때 `pooling: 'mean'`, `normalize: true`로 시퀀스를 하나의 단위 벡터로 만들고 코사인 유사도에 맞게 정규화한다. |
+| 출력 | 텐서 형태의 결과에서 `.data`를 꺼내 **`Float32Array`** 등으로 후처리해 앱의 유사도 계산에 넘긴다. |
+| 장점 | **서버로 임베딩 요청을 보내지 않음**(텍스트가 사용자 브라우저 안에서 처리되는 경향이 강함), Hugging Face에 올라온 다양한 ONNX 변환 모델을 동일 API로 시도하기 쉽다. |
+| 유의점 | **첫 로드 시 모델 다운로드**로 시간·트래픽이 들고, **메인 스레드/WebAssembly 부하**로 UI가 잠시 무거워질 수 있다. **CORS·네트워크·저장 공간** 이슈 시 로드가 실패할 수 있어, 콘솔·캐시 삭제 등이 필요할 수 있다. |
+
 ## 설치 및 실행
 
 ### 의존성 설치
