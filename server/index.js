@@ -2,8 +2,10 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
+const path = require('path');
 const QueueManager = require('./services/queueManager');
 const YoutubeService = require('./services/youtubeService');
+const clientBuildPath = path.join(__dirname, 'public');
 
 const app = express();
 const server = http.createServer(app);
@@ -18,6 +20,7 @@ app.use(cors({
   origin: "*" // 모든 origin 허용
 }));
 app.use(express.json());
+app.use(express.static(clientBuildPath));
 
 // 서비스 초기화
 const queueManager = new QueueManager();
@@ -1772,6 +1775,15 @@ function initializeServer() {
 
 // 서버 시작 전 초기화
 initializeServer();
+
+// SPA 라우팅 지원: API/소켓 외 경로는 빌드된 index.html 반환
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/socket.io')) {
+    return next();
+  }
+
+  return res.sendFile(path.join(clientBuildPath, 'index.html'));
+});
 
 // 서버 시작
 const PORT = process.env.PORT || 5000;

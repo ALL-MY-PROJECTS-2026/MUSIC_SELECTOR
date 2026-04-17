@@ -1,19 +1,14 @@
 {
   "name": "music-selector",
   "version": "1.0.0",
-  "description": "실시간 음악 선곡 웹 애플리케이션",
+  "description": "배포용 음악 선곡 서버",
   "main": "server/index.js",
   "scripts": {
-    "dev": "concurrently \"npm run server\" \"npm run client\"",
-    "server": "cd server && node index.js",
-    "client": "cd client && npm start",
-    "install-all": "npm install && cd server && npm install && cd ../client && npm install"
+    "start": "node server/index.js",
+    "install-prod": "cd server && npm install --omit=dev"
   },
   "keywords": ["music", "youtube", "queue", "realtime"],
   "author": "",
-  "license": "ISC",
-  "devDependencies": {
-    "concurrently": "^8.2.2"
-  }
+  "license": "ISC"
 }
 
