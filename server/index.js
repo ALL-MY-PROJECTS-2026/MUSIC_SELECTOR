@@ -106,6 +106,44 @@ function durationToSeconds(duration) {
   return parts.reduce((total, p) => total * 60 + p, 0);
 }
 
+// 제목 앞의 가수 이름들: "Adele - When We Were Young" -> ['adele'], "BTS (방탄소년단) 'Dynamite'" -> ['bts', '방탄소년단']
+function extractArtistNames(title) {
+  const cleaned = title.replace(/^(\s*(\[[^\]]*\]|【[^】]*】)\s*)+/, '').trim();
+  let part = null;
+  const bySeparator = cleaned.split(/\s[-–—_]\s/);
+  if (bySeparator.length > 1) {
+    part = bySeparator[0].split(/[｜|:：]/).pop();
+  } else {
+    const quoted = cleaned.match(/^([^'"‘’“”「『]+?)\s*['"‘’“”「『]/);
+    part = quoted ? quoted[1] : null;
+  }
+  if (!part || part.length > 40) return [];
+  const normalize = (s) => s.toLowerCase().replace(/[\s.'’·]/g, '');
+  const names = [normalize(part.replace(/[([（][^)\]）]*[)\]）]/g, ' '))];
+  (part.match(/[([（][^)\]）]+[)\]）]/g) || []).forEach((p) => names.push(normalize(p.slice(1, -1))));
+  return names.filter((n) => n.length >= 2);
+}
+
+// 제목에서 곡명 후보: "Adele - When We Were Young (Live)" -> ['whenwewereyoung'],
+// "IU (아이유) _ Good Day (좋은 날) _ MV" -> ['goodday', '좋은날'] (괄호 안 다른 표기도 곡명으로 인정)
+function extractSongNames(title) {
+  const cleaned = title.replace(/^(\s*(\[[^\]]*\]|【[^】]*】)\s*)+/, '').trim();
+  let song = null;
+  const bySeparator = cleaned.split(/\s[-–—_]\s/);
+  if (bySeparator.length > 1) {
+    song = bySeparator[1];
+  } else {
+    const quoted = cleaned.match(/['"‘’“”「『]([^'"‘’“”」』]+)['"‘’“”」』]/);
+    song = quoted ? quoted[1] : null;
+  }
+  if (!song) return [];
+  song = song.split(/\s?[:：|｜]\s?/)[0].replace(/\[[^\]]*\]|【[^】]*】/g, ' ');
+  const normalize = (x) => cleanTitleForSearch(x).toLowerCase().replace(/[\s.'’·!?,]/g, '');
+  const names = [normalize(song.replace(/[([（][^)\]）]*[)\]）]/g, ' '))];
+  (song.match(/[([（][^)\]）]+[)\]）]/g) || []).forEach((p) => names.push(normalize(p.slice(1, -1))));
+  return names.filter((n) => n.length >= 2 && n.length <= 40 && !/^(feat|ft|prod|live|lyrics?|mv|official)/.test(n));
+}
+
 // "BTS (방탄소년단) 'Dynamite' Official MV" -> "BTS Dynamite"
 function cleanTitleForSearch(title) {
   return title
@@ -120,15 +158,32 @@ async function findSubstituteVideo(music) {
   const baseTitle = music.originalTitle || music.title;
   const query = cleanTitleForSearch(baseTitle) || baseTitle;
   const targetSeconds = durationToSeconds(music.originalDuration || music.duration);
-  const tolerance = targetSeconds ? Math.max(20, targetSeconds * 0.1) : null;
+  // 라이브·리마스터처럼 원곡보다 길거나 짧은 버전도 고를 수 있게 ±30초 또는 ±20% (가수·곡명 확인이 따로 걸러냄)
+  const tolerance = targetSeconds ? Math.max(30, targetSeconds * 0.2) : null;
   const tried = new Set([...(music.triedVideoIds || []), music.videoId]);
   const originalLower = baseTitle.toLowerCase();
 
   console.log(`[findSubstituteVideo] 대체 영상 검색: "${query}" (원곡 ${music.originalDuration || music.duration || '시간 정보 없음'})`);
   const results = await youtubeService.search(query, 8);
 
+  // 원곡 가수가 확인되면 후보 제목이나 채널명에 그 가수가 있어야 함 (같은 곡을 다른 가수가 부른 방송 영상 등 제외)
+  const artistNames = extractArtistNames(baseTitle);
+  const songNames = extractSongNames(baseTitle);
+  const normalizeText = (s) => (s || '').toLowerCase().replace(/[\s.'’·!?,]/g, '');
+
   return results.find((item) => {
     if (tried.has(item.videoId) || unplayableVideoIds.has(item.videoId)) return false;
+    // 원곡 곡명이 확인되면 후보 제목에도 그 곡명(또는 괄호 안 다른 표기)이 있어야 함
+    if (songNames.length > 0 && !songNames.some((name) => normalizeText(item.title).includes(name))) return false;
+    if (artistNames.length > 0) {
+      const haystack = normalizeText(item.title) + ' ' + normalizeText(item.channel);
+      if (!artistNames.some((name) => haystack.includes(name))) return false;
+      // 후보 제목이 "다른가수 - 곡명" 형식이면 제외 ("곡명 - 원곡가수"처럼 순서만 바뀐 경우는 허용)
+      const candidateArtists = extractArtistNames(item.title);
+      const sameArtist = candidateArtists.some((a) => artistNames.some((n) => a.includes(n) || n.includes(a)));
+      const restOfTitle = normalizeText(item.title.split(/\s[-–—_]\s/).slice(1).join(' '));
+      if (candidateArtists.length > 0 && !sameArtist && !artistNames.some((n) => restOfTitle.includes(n))) return false;
+    }
     const titleLower = item.title.toLowerCase();
     if (SUBSTITUTE_BANNED_WORDS.some((w) => hasWord(titleLower, w) && !hasWord(originalLower, w))) return false;
     const seconds = durationToSeconds(item.duration);
@@ -464,6 +519,13 @@ io.on('connection', (socket) => {
     const { videoId, code } = data || {};
     // 이미 다음 곡으로 넘어갔거나 같은 곡에 대한 중복 보고면 무시
     if (!videoId || !currentPlaying || currentPlaying.videoId !== videoId || unplayableHandlingId === currentPlaying.id) {
+      return;
+    }
+    // 제어권자가 접속해 있으면 제어권자의 보고만 따름
+    // (한 사람의 브라우저·지역에서만 막힌 영상 때문에 잘 듣고 있던 다른 사람들까지 곡이 바뀌지 않도록)
+    const controllerConnected = controlSocketId && io.sockets.sockets.get(controlSocketId);
+    if (controllerConnected && socket.id !== controlSocketId) {
+      console.log(`[musicUnplayable] 제어권자가 아닌 접속자의 보고라 곡은 유지: ${currentPlaying.title} (${videoId}, 오류 ${code}, 보고: ${socket.id.slice(0, 8)})`);
       return;
     }
     const failed = currentPlaying;

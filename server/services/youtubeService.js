@@ -96,7 +96,8 @@ class YoutubeService {
           videoId,
           title,
           thumbnail,
-          duration: duration
+          duration: duration,
+          channel: item.channelTitle || item.shortBylineText?.runs?.[0]?.text || null // 대체 영상 고를 때 가수 확인용
         });
       }
 
