@@ -618,3 +618,18 @@
   justify-content: flex-end;
   margin: 4px 0 8px;
 }
+
+/* 로고 (A 허브 점): "SOUND HUB" 옆 주홍 점 */
+.header h1.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-dot {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+}

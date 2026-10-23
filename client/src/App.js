@@ -655,7 +655,7 @@ function App() {
       )}
       <div className="container">
         <header className="header">
-          <h1>SOUND HUB</h1>
+          <h1 className="brand">SOUND HUB<span className="brand-dot" aria-hidden="true"></span></h1>
           <div className="header-right">
             {!isAdmin && (
               <button onClick={handleOpenAuthModal} className="auth-btn">
