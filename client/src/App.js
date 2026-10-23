@@ -7,6 +7,7 @@ import QueueList from './components/QueueList';
 import ClientList from './components/ClientList';
 import LikedMusicList from './components/LikedMusicList';
 import PlaylistModal from './components/PlaylistModal';
+import Pager, { usePaging } from './components/Pager';
 import './theme.css'; // 리디자인 레이어 (컴포넌트 CSS 뒤에 로드)
 
 // 서버 주소 설정 (환경 변수 또는 현재 호스트 기반)
@@ -95,6 +96,11 @@ function App() {
   useEffect(() => {
     document.body.className = isDarkMode ? 'dark-mode' : 'light-mode';
   }, []);
+
+  // 팝업 안 목록은 세로 스크롤 대신 페이지로 나눔
+  const noticesPaging = usePaging(myNotices, 5);
+  const sendPaging = usePaging(playlistsToSend, 5);
+  const receivedPaging = usePaging(receivedPlaylistData?.playlists, 5);
 
   const markAllNoticesRead = () => {
     setMyNotices((prev) => {
@@ -405,6 +411,10 @@ function App() {
     socket.on('musicSubstituted', (data) => {
       showSkipNotice({ kind: 'substituted', title: data.originalTitle, newTitle: data.title, code: data.code }, 6000);
     });
+    // 찾는 도중 다른 곡으로 넘어가 검색이 취소되면 "찾는 중" 안내를 닫음
+    socket.on('musicUnplayableCancelled', () => {
+      setSkipNotice((prev) => (prev && prev.kind === 'searching' ? null : prev));
+    });
     socket.on('musicSkippedUnplayable', (data) => {
       const seconds = Math.round((data.delayMs || 0) / 1000);
       showSkipNotice({ kind: 'skip', title: data.title, seconds, code: data.code }, (data.delayMs || 0) + 2000);
@@ -417,6 +427,7 @@ function App() {
     return () => {
       socket.off('musicSkippedUnplayable');
       socket.off('musicUnplayableSearching');
+      socket.off('musicUnplayableCancelled');
       socket.off('myRequestNotice');
       clearTimeout(personalToastTimer);
       socket.off('musicSubstituted');
@@ -712,10 +723,11 @@ function App() {
                     <span>내 신청 기록</span>
                     <button className="my-notices-readall" onClick={markAllNoticesRead}>모두 읽음</button>
                   </div>
+                  <Pager {...noticesPaging} />
                   {myNotices.length === 0 ? (
                     <p className="my-notices-empty">내가 신청한 곡이 막히면 여기에 남아요.</p>
                   ) : (
-                    myNotices.map((n) => (
+                    noticesPaging.pageItems.map((n) => (
                       <div key={n.id} className={`my-notice-item ${n.read ? '' : 'unread'} kind-${n.kind}`}>
                         <span className="my-notice-icon material-icons" aria-hidden="true">
                           {n.kind === 'substituted' ? 'swap_horiz' : n.kind === 'skipped' ? 'skip_next' : 'block'}
@@ -802,8 +814,9 @@ function App() {
               </div>
               <div className="modal-body">
                 <p>다음 플레이리스트 {playlistsToSend.length}개를 제어권 보유자에게 전송하시겠습니까?</p>
+                <Pager {...sendPaging} />
                 <div className="received-playlist-list">
-                  {playlistsToSend.map((playlist, index) => (
+                  {sendPaging.pageItems.map((playlist, index) => (
                     <div key={playlist.id || index} className="received-playlist-item">
                       <div className="playlist-item-name">{playlist.name}</div>
                       <div className="playlist-item-meta">
@@ -837,8 +850,9 @@ function App() {
               </div>
               <div className="modal-body">
                 <p>다른 클라이언트에서 플레이리스트 {receivedPlaylistData.playlists?.length || 0}개를 전송했습니다.</p>
+                <Pager {...receivedPaging} />
                 <div className="received-playlist-list">
-                  {receivedPlaylistData.playlists?.map((playlist, index) => (
+                  {receivedPaging.pageItems.map((playlist, index) => (
                     <div key={playlist.id || index} className="received-playlist-item">
                       <div className="playlist-item-name">{playlist.name}</div>
                       <div className="playlist-item-meta">

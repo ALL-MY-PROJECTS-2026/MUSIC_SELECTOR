@@ -4,9 +4,12 @@
  */
 
 import React from 'react';
+import Pager, { usePaging } from '../Pager';
 import './RecommendationList.css';
 
 const RecommendationList = ({ recommendations, onAddToQueue }) => {
+  const paging = usePaging(recommendations, 5);
+
   if (!recommendations || recommendations.length === 0) {
     return (
       <div className="recommendation-list-empty">
@@ -17,7 +20,8 @@ const RecommendationList = ({ recommendations, onAddToQueue }) => {
 
   return (
     <div className="recommendation-list">
-      {recommendations.map((recommendation, index) => (
+      <Pager {...paging} />
+      {paging.pageItems.map((recommendation, index) => (
         <div key={recommendation.videoId || index} className="recommendation-item">
           <div className="recommendation-item-thumbnail">
             <img 

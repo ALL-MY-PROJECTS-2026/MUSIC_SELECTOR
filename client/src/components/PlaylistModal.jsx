@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import Pager, { usePaging } from './Pager';
 import './PlaylistModal.css';
 
 function PlaylistModal({ isOpen, onClose, queue, socket, onLoadPlaylist, hasControl = false }) {
@@ -12,6 +13,9 @@ function PlaylistModal({ isOpen, onClose, queue, socket, onLoadPlaylist, hasCont
   const [selectedMusic, setSelectedMusic] = useState(null);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const itemsPerPage = 5;
+  // 저장된 플레이리스트 목록과 플레이리스트 선택 목록도 세로 스크롤 대신 페이지로 나눔
+  const savedPaging = usePaging(savedPlaylists, itemsPerPage);
+  const selectorPaging = usePaging(savedPlaylists, itemsPerPage);
 
   // 모달이 열릴 때마다 좋아요 목록 및 AI 추천 노래 로드
   useEffect(() => {
@@ -737,11 +741,12 @@ function PlaylistModal({ isOpen, onClose, queue, socket, onLoadPlaylist, hasCont
             <div className="playlist-section-header">
               <h3>저장된 플레이리스트 ({savedPlaylists.length}개)</h3>
             </div>
+            <Pager {...savedPaging} />
             <div className="saved-playlists-list">
               {savedPlaylists.length === 0 ? (
                 <p className="empty-message">저장된 플레이리스트가 없습니다.</p>
               ) : (
-                savedPlaylists.map((playlist) => (
+                savedPaging.pageItems.map((playlist) => (
                   <div 
                     key={playlist.id} 
                     className={`saved-playlist-item ${selectedPlaylist?.id === playlist.id ? 'selected' : ''}`}
@@ -815,8 +820,9 @@ function PlaylistModal({ isOpen, onClose, queue, socket, onLoadPlaylist, hasCont
               {savedPlaylists.length > 0 && (
                 <div className="playlist-selector-list">
                   <h4>기존 플레이리스트</h4>
+                  <Pager {...selectorPaging} />
                   <div className="playlist-selector-items">
-                    {savedPlaylists.map(playlist => (
+                    {selectorPaging.pageItems.map(playlist => (
                       <div
                         key={playlist.id}
                         className="playlist-selector-item"

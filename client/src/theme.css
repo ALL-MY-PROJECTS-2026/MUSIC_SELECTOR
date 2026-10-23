@@ -588,3 +588,33 @@
   max-height: none !important;
   overflow-y: visible !important;
 }
+
+/* 팝업과 팝업 안 목록: 세로 스크롤 대신 페이지로 나눔 (Pager.jsx) */
+.modal-content,
+.playlist-modal,
+.playlist-selector-modal,
+.playlist-selector-content,
+.playlist-selector-items,
+.saved-playlists-list,
+.received-playlist-list,
+.recommendation-modal-content,
+.recommendation-modal-body,
+.recommendation-modal-info-panel,
+.recommendation-list,
+.my-notices-panel {
+  max-height: none !important;
+  height: auto !important;
+  overflow: visible !important;
+}
+
+/* 화면이 아주 작아 팝업이 화면보다 길어질 때만 바깥 배경이 스크롤되도록 (내용이 잘리지 않게) */
+.modal-overlay,
+.playlist-selector-overlay,
+.recommendation-modal-overlay {
+  overflow-y: auto;
+}
+
+.pager {
+  justify-content: flex-end;
+  margin: 4px 0 8px;
+}

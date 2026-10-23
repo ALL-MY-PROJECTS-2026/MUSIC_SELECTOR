@@ -15,6 +15,17 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
   const localPlayModeRef = useRef(localPlayMode);
   const musicRef = useRef(music);
   musicRef.current = music;
+
+  // musicEnded에 어떤 영상이 끝났는지 함께 보냄 (서버가 다른 곡에 대한 늦은 신호를 무시할 수 있도록)
+  const getEndedPayload = () => {
+    let videoId = null;
+    try {
+      videoId = youtubePlayerRef.current?.getVideoData?.()?.video_id || null;
+    } catch (e) {
+      // 무시
+    }
+    return { videoId: videoId || musicRef.current?.videoId || null };
+  };
   hasControlRef.current = hasControl;
   isPlayingRef.current = isPlaying;
   localPlayModeRef.current = localPlayMode;
@@ -94,7 +105,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
               console.log('[제어권 획득] 이미 재생 종료된 상태 감지 - 다음 곡으로 이동');
               if (!endedSentRef.current) {
                 endedSentRef.current = true;
-                window.socket.emit('musicEnded');
+                window.socket.emit('musicEnded', getEndedPayload());
               }
             }
           } catch (e) {
@@ -445,7 +456,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                     console.log('[loadVideoById] 동영상 재생 불가능 감지 - 다음 곡으로 이동');
                     if (window.socket && hasControl && !endedSentRef.current) {
                       endedSentRef.current = true;
-                      window.socket.emit('musicEnded');
+                      window.socket.emit('musicEnded', getEndedPayload());
                     }
                   } else if (playerState !== window.YT.PlayerState.PLAYING && attemptCount >= maxAttempts - 1) {
                     // 최대 시도 횟수에 도달했는데도 PLAYING 상태가 아니면 재생 실패로 간주
@@ -459,7 +470,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                     console.log('[loadVideoById] 재생 실패 감지 (최대 시도 횟수 도달) - 다음 곡으로 이동, 최종 상태:', playerState);
                     if (window.socket && hasControl && !endedSentRef.current) {
                       endedSentRef.current = true;
-                      window.socket.emit('musicEnded');
+                      window.socket.emit('musicEnded', getEndedPayload());
                     }
                   }
                 } catch (e) {
@@ -480,7 +491,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
           // 로드 실패 시 다음 곡으로 이동
           if (window.socket && hasControl && !endedSentRef.current) {
             endedSentRef.current = true;
-            window.socket.emit('musicEnded');
+            window.socket.emit('musicEnded', getEndedPayload());
               }
             }
           }, 200); // 플레이어 정리 후 200ms 지연
@@ -501,7 +512,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
               console.log('[loadVideoById] 비디오 로드 재시도 오류:', loadError);
               if (window.socket && hasControl && !endedSentRef.current) {
                 endedSentRef.current = true;
-                window.socket.emit('musicEnded');
+                window.socket.emit('musicEnded', getEndedPayload());
               }
             }
           }
@@ -817,7 +828,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                               console.log('[onReady] 동영상 재생 불가능 감지 (UNSTARTED 상태 유지) - 다음 곡으로 이동');
                               if (!endedSentRef.current) {
                                 endedSentRef.current = true;
-                                window.socket.emit('musicEnded');
+                                window.socket.emit('musicEnded', getEndedPayload());
                               }
                             }
                           }
@@ -846,7 +857,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                               console.log('[onReady] 재생 실패 감지 (UNSTARTED 상태 유지) - 다음 곡으로 이동');
                               if (!endedSentRef.current) {
                                 endedSentRef.current = true;
-                                window.socket.emit('musicEnded');
+                                window.socket.emit('musicEnded', getEndedPayload());
                               }
                             }
                           }
@@ -954,7 +965,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                   elapsedSinceMusicStart: elapsedSinceMusicStart,
                   elapsedSeconds: elapsedSinceMusicStart ? (elapsedSinceMusicStart / 1000).toFixed(2) : null
                 });
-                window.socket.emit('musicEnded');
+                window.socket.emit('musicEnded', getEndedPayload());
                 manualNextRef.current = false; // musicEnded 전송 후 수동 다음 곡 전환 플래그 리셋
                 const sentTime = Date.now();
                 console.log('[onStateChange] musicEnded 이벤트 전송 완료', {
@@ -1293,6 +1304,8 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                 // 무시
               }
               failedVideoId = failedVideoId || musicRef.current?.videoId;
+              // 이 영상은 서버가 대체/건너뛰기를 처리하므로, 재생 실패 감지 타이머가 musicEnded를 따로 보내지 않게 막음
+              endedSentRef.current = true;
               if (window.socket && failedVideoId) {
                 window.socket.emit('musicUnplayable', { videoId: failedVideoId, code: event.data });
               }
@@ -2003,7 +2016,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                 console.log('[재생 상태 동기화] loadVideoById 오류:', e);
                 if (window.socket && hasControl && !endedSentRef.current) {
                   endedSentRef.current = true;
-                  window.socket.emit('musicEnded');
+                  window.socket.emit('musicEnded', getEndedPayload());
                   }
                 }
             }, 200); // 플레이어 정리 후 200ms 지연
@@ -2305,7 +2318,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                 isPlaying,
                 manualNext: manualNextRef.current
               });
-              window.socket.emit('musicEnded');
+              window.socket.emit('musicEnded', getEndedPayload());
               manualNextRef.current = false; // musicEnded 전송 후 수동 다음 곡 전환 플래그 리셋
             } else {
               // 정지 상태이거나 다른 이유로 musicEnded를 전송하지 않는 경우

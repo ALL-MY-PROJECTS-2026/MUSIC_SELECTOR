@@ -63,6 +63,7 @@ function saveUnplayableVideoIds() {
   });
 }
 let unplayableHandlingId = null; // 재생 불가 처리 중인 곡의 id (중복 보고 방지)
+let substituteSearchingId = null; // 대체 영상을 찾는 중인 곡의 id (찾는 동안 musicEnded로 넘어가지 않도록)
 
 // 신청한 곡이 막혔을 때 신청자에게만 보내는 기록 (신청자가 접속해 있지 않으면 다시 접속할 때 전달)
 const pendingRequestNotices = new Map(); // sessionId -> [notice]
@@ -476,6 +477,7 @@ io.on('connection', (socket) => {
     if (attempts < MAX_SUBSTITUTE_ATTEMPTS) {
       io.emit('musicUnplayableSearching', { videoId, title: failed.title, code });
       let substitute = null;
+      substituteSearchingId = failed.id;
       try {
         // 검색이 응답하지 않으면 재생 불가 곡에 계속 머무르지 않도록 시간 제한
         substitute = await Promise.race([
@@ -484,9 +486,15 @@ io.on('connection', (socket) => {
         ]);
       } catch (error) {
         console.error('[musicUnplayable] 대체 영상 검색 오류:', error.message);
+      } finally {
+        if (substituteSearchingId === failed.id) {
+          substituteSearchingId = null;
+        }
       }
-      // 검색하는 동안 다른 곡으로 넘어갔으면 중단
+      // 검색하는 동안 사용자가 직접 다른 곡으로 넘겼으면 중단하고 "찾는 중" 안내를 닫음
       if (!currentPlaying || currentPlaying.id !== failed.id) {
+        console.log(`[musicUnplayable] 대체 영상 검색 중 곡이 바뀌어 중단: ${failed.title}`);
+        io.emit('musicUnplayableCancelled', { videoId });
         return;
       }
       if (substitute) {
@@ -522,8 +530,21 @@ io.on('connection', (socket) => {
 
   // 재생 종료 알림 (클라이언트에서 감지) - 재생 불가능한 동영상 감지 시 즉시 처리
   // 매우 중요: 어떤 상태든 음악이 끝나면 무조건 다음 곡으로 넘어가야 함
-  socket.on('musicEnded', () => {
+  socket.on('musicEnded', (data) => {
     const receiveTime = Date.now();
+
+    // 대체 영상을 찾는 동안에는 재생 실패 감지 등으로 들어온 종료 신호를 무시 (다음 곡으로 넘어가 대기열이 비는 문제 방지)
+    if (currentPlaying && substituteSearchingId === currentPlaying.id) {
+      console.log(`[musicEnded] 대체 영상 검색 중이라 무시: ${currentPlaying.title}`);
+      socket.emit('musicEndedReceived', { received: true, ignored: true, reason: '대체 영상 검색 중' });
+      return;
+    }
+    // 다른 영상에 대한 늦은 종료 신호는 무시 (예: 이전 곡 플레이어의 타이머)
+    if (data && data.videoId && currentPlaying && data.videoId !== currentPlaying.videoId) {
+      console.log(`[musicEnded] 현재 곡이 아닌 영상의 종료 신호라 무시: ${data.videoId} (현재 ${currentPlaying.videoId})`);
+      socket.emit('musicEndedReceived', { received: true, ignored: true, reason: '현재 곡이 아님' });
+      return;
+    }
     const elapsedSinceStart = playStartTime ? receiveTime - playStartTime : null;
     
     console.log(`[musicEnded] 음악 재생 종료 알림 수신 (클라이언트: ${socket.id.slice(0, 8)})`, {
