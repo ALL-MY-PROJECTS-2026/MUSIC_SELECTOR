@@ -42,7 +42,7 @@
   padding: 6px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 10px;
   color: var(--text-primary);
   cursor: pointer;
   transition: all 0.2s;
@@ -161,7 +161,7 @@
 .queue-ai-badge {
   display: inline-block;
   padding: 2px 6px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--bg-tertiary);
   color: white;
   font-size: 10px;
   font-weight: 600;

@@ -46,10 +46,10 @@
   align-items: center;
   gap: 5px;
   padding: 8px 16px;
-  background: #4a9eff;
+  background: var(--accent); color: var(--on-accent) !important;
   color: white;
   border: none;
-  border-radius: 4px;
+  border-radius: 10px;
   font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
@@ -63,7 +63,7 @@
 }
 
 .save-playlist-btn:hover {
-  background: #3a8eef;
+  background: var(--accent-hover); color: var(--on-accent) !important;
 }
 
 .save-playlist-btn .material-icons {
@@ -83,7 +83,7 @@
   padding: 6px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 10px;
   color: var(--text-primary);
   cursor: pointer;
   transition: all 0.2s;
@@ -131,7 +131,7 @@
   padding: 10px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 10px;
   transition: background-color 0.2s;
 }
 
@@ -142,8 +142,8 @@
   padding: 6px;
   background: transparent;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
-  color: #4a9eff;
+  border-radius: 10px;
+  color: var(--accent-text);
   cursor: pointer;
   transition: all 0.2s;
   min-width: 32px;
@@ -151,9 +151,9 @@
 }
 
 .save-single-music-btn:hover {
-  background: #4a9eff;
+  background: var(--accent); color: var(--on-accent) !important;
   color: white;
-  border-color: #4a9eff;
+  border-color: var(--accent-text);
 }
 
 .save-single-music-btn .material-icons {
@@ -170,7 +170,7 @@
   background: rgba(255, 77, 77, 0.1);
   color: #ff4d4d;
   border: 1px solid rgba(255, 77, 77, 0.3);
-  border-radius: 4px;
+  border-radius: 10px;
   cursor: pointer;
   transition: all 0.2s;
   flex-shrink: 0;
@@ -206,9 +206,9 @@
   gap: 4px;
   padding: 4px 8px;
   background: rgba(74, 158, 255, 0.1);
-  color: #4a9eff;
+  color: var(--accent-text);
   border: 1px solid rgba(74, 158, 255, 0.3);
-  border-radius: 4px;
+  border-radius: 10px;
   font-size: 0.75rem;
   font-weight: 600;
   white-space: nowrap;
@@ -261,7 +261,7 @@
   background: rgba(255, 77, 77, 0.1);
   color: #ff4d4d;
   border: 1px solid rgba(255, 77, 77, 0.3);
-  border-radius: 4px;
+  border-radius: 10px;
   font-size: 0.9rem;
   cursor: pointer;
   transition: all 0.2s;
@@ -330,7 +330,7 @@
   padding: 12px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 10px;
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -342,7 +342,7 @@
 
 .saved-playlist-item.selected {
   background: var(--bg-tertiary);
-  border-color: #4a9eff;
+  border-color: var(--accent-text);
 }
 
 .playlist-item-info {
@@ -381,7 +381,7 @@
   padding: 6px;
   background: transparent;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 10px;
   color: var(--text-primary);
   cursor: pointer;
   display: flex;
@@ -404,12 +404,12 @@
 }
 
 .load-playlist-btn {
-  color: #4a9eff;
-  border-color: #4a9eff;
+  color: var(--accent-text);
+  border-color: var(--accent-text);
 }
 
 .load-playlist-btn:hover {
-  background: #4a9eff;
+  background: var(--accent); color: var(--on-accent) !important;
   color: white;
 }
 
@@ -528,7 +528,7 @@
   border: none;
   color: var(--text-primary);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: 10px;
   transition: background 0.2s;
 }
 
@@ -551,7 +551,7 @@
   padding: 12px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 10px;
 }
 
 .playlist-selector-info p {
@@ -592,7 +592,7 @@
   padding: 12px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 10px;
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -603,7 +603,7 @@
 }
 
 .playlist-selector-item .material-icons:first-child {
-  color: #4a9eff;
+  color: var(--accent-text);
   font-size: 1.5rem;
   flex-shrink: 0;
 }
@@ -651,7 +651,7 @@
   padding: 10px 12px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 10px;
   color: var(--text-primary);
   font-size: 0.95rem;
   outline: none;
@@ -659,7 +659,7 @@
 }
 
 .playlist-selector-new-input input:focus {
-  border-color: #4a9eff;
+  border-color: var(--accent-text);
 }
 
 .playlist-selector-new-input input::placeholder {
@@ -671,10 +671,10 @@
   align-items: center;
   gap: 6px;
   padding: 10px 16px;
-  background: #4a9eff;
+  background: var(--accent); color: var(--on-accent) !important;
   color: white;
   border: none;
-  border-radius: 4px;
+  border-radius: 10px;
   font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
@@ -683,7 +683,7 @@
 }
 
 .playlist-selector-create-btn:hover:not(:disabled) {
-  background: #3a8eef;
+  background: var(--accent-hover); color: var(--on-accent) !important;
 }
 
 .playlist-selector-create-btn:disabled {
@@ -727,7 +727,7 @@
   padding: 8px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 10px;
   color: var(--text-primary);
   cursor: pointer;
   transition: all 0.2s;
@@ -742,8 +742,8 @@
 }
 
 .modal-action-btn.export-btn:hover {
-  background: #4a9eff;
-  border-color: #4a9eff;
+  background: var(--accent); color: var(--on-accent) !important;
+  border-color: var(--accent-text);
   color: white;
 }
 

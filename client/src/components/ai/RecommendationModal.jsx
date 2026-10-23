@@ -32,10 +32,10 @@ const RecommendationModal = ({
               }}
               title="추천 기준 및 모델 정보"
             >
-              ℹ️
+              <span className="material-icons" aria-hidden="true">info</span>
             </button>
-            <button className="recommendation-modal-close" onClick={onClose}>
-              ×
+            <button className="recommendation-modal-close" onClick={onClose} aria-label="닫기">
+              <span className="material-icons" aria-hidden="true">close</span>
             </button>
           </div>
         </div>
@@ -43,7 +43,7 @@ const RecommendationModal = ({
         {showInfo && (
           <div className="recommendation-modal-info-panel">
             <div className="recommendation-info-section">
-              <h3>📊 추천 기준</h3>
+              <h3>추천 기준</h3>
               <div className="recommendation-info-content">
                 <div className="recommendation-info-item">
                   <strong>아티스트 일치 (45%) - 1순위</strong>
@@ -68,7 +68,7 @@ const RecommendationModal = ({
               </div>
             </div>
             <div className="recommendation-info-section">
-              <h3>🤖 모델 정보</h3>
+              <h3>모델 정보</h3>
               <div className="recommendation-info-content">
                 <div className="recommendation-info-item">
                   <strong>모델명</strong>
@@ -97,7 +97,7 @@ const RecommendationModal = ({
               </div>
             </div>
             <div className="recommendation-info-section">
-              <h3>🔍 추천 프로세스</h3>
+              <h3>추천 과정</h3>
               <div className="recommendation-info-content">
                 <ol className="recommendation-process-list">
                   <li>대기열에서 하트가 높은 상위 10개 음악 선택</li>

@@ -17,6 +17,8 @@ function MusicRequestForm({ onSearchMusic, onRequestMusic, socket, hasControl = 
 
     // 검색 결과 수신
     const handleSearchResults = (data) => {
+      // AI 추천 등 내부 검색(requestId 있음) 결과는 검색 목록에 표시하지 않음
+      if (data.requestId) return;
       setIsLoading(false);
       setSearchResults(data.results || []);
       setCurrentPage(1); // 검색 시 첫 페이지로 리셋

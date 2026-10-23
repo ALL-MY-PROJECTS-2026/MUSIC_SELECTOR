@@ -52,6 +52,114 @@ const hasControlBySocketId = (socketId) => {
 
 // 좋아요 데이터 저장소
 const musicLikes = new Map(); // videoId -> { title, count, likedSessions: Set }
+// 플레이어에서 재생 불가(100/101/150 등)로 확인된 videoId - 서버 재시작 후에도 유지되도록 파일에 저장
+const UNPLAYABLE_FILE = require('path').join(__dirname, 'unplayable-videos.json');
+const unplayableVideoIds = new Set((() => {
+  try { return JSON.parse(require('fs').readFileSync(UNPLAYABLE_FILE, 'utf8')); } catch (e) { return []; }
+})());
+function saveUnplayableVideoIds() {
+  require('fs').writeFile(UNPLAYABLE_FILE, JSON.stringify([...unplayableVideoIds]), (err) => {
+    if (err) console.error('[musicUnplayable] 재생 불가 목록 저장 실패:', err.message);
+  });
+}
+let unplayableHandlingId = null; // 재생 불가 처리 중인 곡의 id (중복 보고 방지)
+
+// 신청한 곡이 막혔을 때 신청자에게만 보내는 기록 (신청자가 접속해 있지 않으면 다시 접속할 때 전달)
+const pendingRequestNotices = new Map(); // sessionId -> [notice]
+const MAX_PENDING_NOTICES = 20;
+
+function notifyRequester(music, notice) {
+  const sessionId = music && music.requesterSessionId;
+  if (!sessionId) return;
+  const payload = { ...notice, id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, at: Date.now() };
+  const socketId = sessionToSocketMap.get(sessionId);
+  const target = socketId && io.sockets.sockets.get(socketId);
+  if (target) {
+    target.emit('myRequestNotice', payload);
+    return;
+  }
+  const list = pendingRequestNotices.get(sessionId) || [];
+  list.push(payload);
+  pendingRequestNotices.set(sessionId, list.slice(-MAX_PENDING_NOTICES));
+}
+
+// 재생 불가 영상 대체 설정
+const MAX_SUBSTITUTE_ATTEMPTS = 2;
+const UNPLAYABLE_SKIP_DELAY = 4000;
+const SUBSTITUTE_SEARCH_TIMEOUT = 15000;
+// 원곡 제목에 없는데 후보 제목에 있으면 다른 버전으로 보고 제외
+const SUBSTITUTE_BANNED_WORDS = ['cover', '커버', 'reaction', '리액션', '반응', '1시간', '1 hour', '耐久', 'loop', '반복', 'sped up', 'speed up', 'slowed', 'nightcore', '8d', 'karaoke', '노래방', 'inst', 'mr', 'remix', 'shorts', '쇼츠', '모음', '연속'];
+
+function hasWord(text, word) {
+  // 짧은 영문 단어는 단어 경계로 비교 (예: "mr"이 "Mr. Brightside"가 아닌 곳에서 걸리지 않도록)
+  if (/^[a-z0-9 ]+$/.test(word)) {
+    return new RegExp(`\\b${word}\\b`, 'i').test(text);
+  }
+  return text.includes(word);
+}
+
+function durationToSeconds(duration) {
+  if (!duration || typeof duration !== 'string') return null;
+  const parts = duration.split(':').map((p) => parseInt(p, 10));
+  if (parts.some(isNaN)) return null;
+  return parts.reduce((total, p) => total * 60 + p, 0);
+}
+
+// "BTS (방탄소년단) 'Dynamite' Official MV" -> "BTS Dynamite"
+function cleanTitleForSearch(title) {
+  return title
+    .replace(/[([【][^)\]】]*[)\]】]/g, ' ')
+    .replace(/official\s*(music\s*)?(video|mv|m\/v|audio)|music\s*video|lyrics?\s*video|lyrics?|m\/v|\bmv\b|\bhd\b|\b4k\b|공식|가사/gi, ' ')
+    .replace(/[「」『』'"|:]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function findSubstituteVideo(music) {
+  const baseTitle = music.originalTitle || music.title;
+  const query = cleanTitleForSearch(baseTitle) || baseTitle;
+  const targetSeconds = durationToSeconds(music.originalDuration || music.duration);
+  const tolerance = targetSeconds ? Math.max(20, targetSeconds * 0.1) : null;
+  const tried = new Set([...(music.triedVideoIds || []), music.videoId]);
+  const originalLower = baseTitle.toLowerCase();
+
+  console.log(`[findSubstituteVideo] 대체 영상 검색: "${query}" (원곡 ${music.originalDuration || music.duration || '시간 정보 없음'})`);
+  const results = await youtubeService.search(query, 8);
+
+  return results.find((item) => {
+    if (tried.has(item.videoId) || unplayableVideoIds.has(item.videoId)) return false;
+    const titleLower = item.title.toLowerCase();
+    if (SUBSTITUTE_BANNED_WORDS.some((w) => hasWord(titleLower, w) && !hasWord(originalLower, w))) return false;
+    const seconds = durationToSeconds(item.duration);
+    if (tolerance && seconds && Math.abs(seconds - targetSeconds) > tolerance) return false;
+    return true;
+  }) || null;
+}
+
+// 대체 영상을 찾지 못했을 때: 안내 후 잠시 뒤 다음 곡으로 이동
+function skipUnplayableMusic(failed, code) {
+  io.emit('musicSkippedUnplayable', { videoId: failed.videoId, title: failed.originalTitle || failed.title, code, delayMs: UNPLAYABLE_SKIP_DELAY });
+  notifyRequester(failed, { kind: 'skipped', title: failed.originalTitle || failed.title });
+
+  setTimeout(() => {
+    // 대기 중에 이미 다른 곡으로 넘어갔으면 아무것도 하지 않음
+    if (!currentPlaying || currentPlaying.id !== failed.id) {
+      return;
+    }
+    playNextMusic(true); // 대기열이 비어 있으면 내부에서 정지 처리
+
+    // 제어권이 없어 다음 곡을 시작하지 못했으면 재생 불가 곡에 머무르지 않도록 정지 처리
+    if (currentPlaying && currentPlaying.id === failed.id) {
+      currentPlaying = null;
+      isPlaying = false;
+      playStartTime = null;
+      musicDuration = null;
+      stopPlaybackPositionBroadcast();
+      io.emit('musicStopped');
+      io.emit('queueUpdated', queueManager.getQueue());
+    }
+  }, UNPLAYABLE_SKIP_DELAY);
+}
 
 // 관리자 패스워드 (환경 변수 또는 기본값)
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
@@ -158,6 +266,13 @@ io.on('connection', (socket) => {
     sessionToSocketMap.set(sessionId, socket.id);
     socketToSessionMap.set(socket.id, sessionId);
     clientInfo.sessionId = sessionId;
+
+    // 접속해 있지 않은 동안 쌓인 내 신청 기록 전달
+    const pendingNotices = pendingRequestNotices.get(sessionId);
+    if (pendingNotices) {
+      pendingNotices.forEach((notice) => socket.emit('myRequestNotice', notice));
+      pendingRequestNotices.delete(sessionId);
+    }
     
     // 이전에 제어권을 가진 세션이면 제어권 복원
     if (controlSessionId === sessionId) {
@@ -189,27 +304,28 @@ io.on('connection', (socket) => {
   // 음악 검색 이벤트 (검색 결과만 반환)
   socket.on('searchMusic', async (data) => {
     try {
-      const { query } = data;
+      const { query, requestId } = data; // requestId: AI 추천 등 내부 검색 구분용 (응답에 그대로 돌려줌)
       console.log(`음악 검색: ${query}`);
 
       // 유튜브에서 검색 (페이징을 위해 더 많은 결과 반환)
-      const searchResults = await youtubeService.search(query, 50);
+      const searchResults = (await youtubeService.search(query, 50))
+        .filter(item => !unplayableVideoIds.has(item.videoId));
       
       // 검색 결과가 없어도 error 이벤트를 보내지 않고 빈 배열만 반환
       // (여러 검색 쿼리 중 일부가 실패해도 계속 진행할 수 있도록)
       if (!searchResults || searchResults.length === 0) {
-        socket.emit('searchResults', { results: [] });
+        socket.emit('searchResults', { results: [], requestId });
         console.log(`검색 결과 없음: ${query}`);
         return;
       }
 
       // 검색 결과 전송
-      socket.emit('searchResults', { results: searchResults });
+      socket.emit('searchResults', { results: searchResults, requestId });
       console.log(`검색 결과 ${searchResults.length}개 반환`);
     } catch (error) {
       console.error('음악 검색 오류:', error);
       // 에러 발생 시에도 빈 배열만 반환 (여러 검색 쿼리 중 일부가 실패해도 계속 진행)
-      socket.emit('searchResults', { results: [] });
+      socket.emit('searchResults', { results: [], requestId });
       // error 이벤트는 실제 네트워크 오류나 서버 오류일 때만 전송
       // 단순히 검색 결과가 없는 경우는 error 이벤트를 보내지 않음
     }
@@ -222,6 +338,17 @@ io.on('connection', (socket) => {
       console.log(`음악 요청: ${musicData.title} (요청자: ${requestedBy || socket.id}, 플레이리스트: ${fromPlaylist}, 첫번째: ${isFirstInPlaylist}, AI추천: ${isAIRecommendation || false})`);
 
       // 영상 재생 가능 여부 검증 (재생 시간도 함께 검증)
+      if (unplayableVideoIds.has(musicData.videoId)) {
+        // 알림창 대신 신청자의 "내 신청 기록"에 남김
+        socket.emit('myRequestNotice', {
+          kind: 'rejected',
+          title: musicData.title,
+          id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          at: Date.now()
+        });
+        return;
+      }
+
       const validation = await youtubeService.validateVideo(musicData.videoId, musicData.duration);
       
       if (!validation.valid) {
@@ -249,7 +376,8 @@ io.on('connection', (socket) => {
         requestedBy: requestedBy || socket.id,
         timestamp: Date.now(),
         duration: musicData.duration || null,
-        isAIRecommendation: isAIRecommendation || false // AI 추천 여부 추가
+        isAIRecommendation: isAIRecommendation || false, // AI 추천 여부 추가
+        requesterSessionId: socketToSessionMap.get(socket.id) || null // 재생이 막혔을 때 신청자에게만 알리기 위함
       };
 
       queueManager.addToQueue(musicItem);
@@ -327,6 +455,69 @@ io.on('connection', (socket) => {
     if (music) {
       startPlaying(music);
     }
+  });
+
+  // 재생 불가 영상 보고 (제어권 여부와 관계없이 모든 클라이언트가 보고)
+  // musicEnded의 5초 무시 규칙을 거치지 않고 바로 다음 곡으로 넘어감
+  socket.on('musicUnplayable', async (data) => {
+    const { videoId, code } = data || {};
+    // 이미 다음 곡으로 넘어갔거나 같은 곡에 대한 중복 보고면 무시
+    if (!videoId || !currentPlaying || currentPlaying.videoId !== videoId || unplayableHandlingId === currentPlaying.id) {
+      return;
+    }
+    const failed = currentPlaying;
+    unplayableHandlingId = failed.id;
+    unplayableVideoIds.add(videoId);
+    saveUnplayableVideoIds();
+    console.log(`[musicUnplayable] 재생 불가 영상: ${failed.title} (${videoId}, 오류 ${code}, 보고: ${socket.id.slice(0, 8)})`);
+
+    // 같은 곡의 퍼가기 가능한 다른 영상으로 대체 (곡당 최대 MAX_SUBSTITUTE_ATTEMPTS번)
+    const attempts = failed.substituteAttempts || 0;
+    if (attempts < MAX_SUBSTITUTE_ATTEMPTS) {
+      io.emit('musicUnplayableSearching', { videoId, title: failed.title, code });
+      let substitute = null;
+      try {
+        // 검색이 응답하지 않으면 재생 불가 곡에 계속 머무르지 않도록 시간 제한
+        substitute = await Promise.race([
+          findSubstituteVideo(failed),
+          new Promise((resolve) => setTimeout(() => resolve(null), SUBSTITUTE_SEARCH_TIMEOUT))
+        ]);
+      } catch (error) {
+        console.error('[musicUnplayable] 대체 영상 검색 오류:', error.message);
+      }
+      // 검색하는 동안 다른 곡으로 넘어갔으면 중단
+      if (!currentPlaying || currentPlaying.id !== failed.id) {
+        return;
+      }
+      if (substitute) {
+        const originalTitle = failed.originalTitle || failed.title;
+        console.log(`[musicUnplayable] 대체 영상 재생: ${substitute.title} (${substitute.videoId}, 시도 ${attempts + 1}/${MAX_SUBSTITUTE_ATTEMPTS})`);
+        io.emit('musicSubstituted', { originalTitle, title: substitute.title, code });
+        notifyRequester(failed, { kind: 'substituted', title: originalTitle, newTitle: substitute.title });
+        if (autoPlayTimer) {
+          clearTimeout(autoPlayTimer);
+          autoPlayTimer = null;
+        }
+        isProcessingNext = false;
+        startPlaying({
+          ...failed,
+          id: Date.now().toString(),
+          videoId: substitute.videoId,
+          title: substitute.title,
+          thumbnail: substitute.thumbnail,
+          duration: substitute.duration,
+          isSubstitute: true,
+          originalTitle,
+          originalDuration: failed.originalDuration || failed.duration,
+          substituteAttempts: attempts + 1,
+          triedVideoIds: [...(failed.triedVideoIds || []), videoId]
+        });
+        return;
+      }
+      console.log(`[musicUnplayable] 조건에 맞는 대체 영상 없음: ${failed.title}`);
+    }
+
+    skipUnplayableMusic(failed, code);
   });
 
   // 재생 종료 알림 (클라이언트에서 감지) - 재생 불가능한 동영상 감지 시 즉시 처리

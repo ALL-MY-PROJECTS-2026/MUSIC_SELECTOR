@@ -6,6 +6,54 @@
 import embeddingService from './embeddingService';
 import SimilarityCalculator from './similarityCalculator';
 
+// 임베딩 제목 중복 판단 기준: multilingual-e5는 서로 다른 노래 제목끼리도 0.8~0.9가 나와서
+// 0.85로는 대부분의 후보가 중복으로 제외됨 (예: "Blueming" vs "좋은 날" 0.87). 다른 버전은 문자열 비교가 따로 걸러냄
+const EMBEDDING_DUPLICATE_THRESHOLD = 0.95;
+
+// 같은 가수 곡이 연달아 추천되지 않도록, 가수당 이 개수를 넘는 곡부터 곡마다 점수에 ARTIST_REPEAT_DECAY를 곱함
+const MAX_PER_ARTIST_IN_TOP = 3;
+const ARTIST_REPEAT_DECAY = 0.85;
+
+// 자주 쓰이는 가수의 한글·영문 표기 (정규화된 이름끼리 연결)
+const ARTIST_ALIAS_PAIRS = [
+  ['아이유', 'iu'], ['방탄소년단', 'bts'], ['뉴진스', 'newjeans'], ['트와이스', 'twice'], ['블랙핑크', 'blackpink'],
+  ['세븐틴', 'seventeen'], ['르세라핌', 'lesserafim'], ['아이브', 'ive'], ['에스파', 'aespa'], ['빅뱅', 'bigbang'],
+  ['악뮤', 'akmu'], ['악동뮤지션', 'akmu'], ['볼빨간사춘기', 'bol4'], ['임영웅', 'limyoungwoong'], ['이무진', 'leemujin'],
+  ['정키', 'jungkey'], ['요아소비', 'yoasobi'], ['테일러스위프트', 'taylorswift'], ['에드시런', 'edsheeran'],
+  ['브루노마스', 'brunomars'], ['아델', 'adele'], ['이매진드래곤스', 'imaginedragons'], ['마이클잭슨', 'michaeljackson'], ['퀸', 'queen'],
+];
+const ARTIST_ALIASES = ARTIST_ALIAS_PAIRS.reduce((map, [a, b]) => {
+  map[a] = b;
+  map[b] = a;
+  return map;
+}, {});
+
+const normalizeName = (name) => name.toLowerCase().replace(/[\s.\-_'’·]/g, '');
+
+// "TWICE (트와이스)" → {twice, 트와이스}, "IU" → {iu, 아이유}
+function getArtistNames(artist) {
+  const names = new Set();
+  names.add(normalizeName(artist.replace(/[([（][^)\]）]*[)\]）]/g, ' ')));
+  (artist.match(/[([（][^)\]）]+[)\]）]/g) || []).forEach((part) => names.add(normalizeName(part.slice(1, -1))));
+  [...names].forEach((name) => {
+    if (ARTIST_ALIASES[name]) names.add(ARTIST_ALIASES[name]);
+  });
+  names.delete('');
+  return names;
+}
+
+// 키워드가 단어로 들어 있는지 확인 (영문은 단어 경계, 한글은 standalone=true일 때 앞뒤가 공백·괄호인 경우만)
+function hasKeyword(text, keyword, standalone = false) {
+  const escaped = keyword.replace(/[.*+?^$\{}()|[\]\\]/g, '\\$&');
+  if (/^[a-z0-9&\- ]+$/.test(keyword)) {
+    return new RegExp('(^|[^a-z0-9])' + escaped + '([^a-z0-9]|$)').test(text);
+  }
+  if (standalone) {
+    return new RegExp('(^|[\\s\\[\\]()【】#,/])' + escaped + '($|[\\s\\[\\]()【】#,/])').test(text);
+  }
+  return text.includes(keyword);
+}
+
 class RecommendationService {
   constructor(socket) {
     this.socket = socket;
@@ -100,39 +148,24 @@ class RecommendationService {
    */
   calculateArtistMatch(artist1, artist2) {
     if (!artist1 || !artist2) return 0;
-    
-    // 정규화 (대소문자 무시, 공백 제거)
-    const normalize = (str) => str.toLowerCase().trim().replace(/\s+/g, '');
-    const norm1 = normalize(artist1);
-    const norm2 = normalize(artist2);
-    
-    // 완전 일치
-    if (norm1 === norm2) return 1.0;
-    
-    // 한 아티스트가 다른 아티스트를 포함하는지 확인 (예: "JungKey" vs "정키(JungKey)")
-    if (norm1.includes(norm2) || norm2.includes(norm1)) {
-      const shorter = norm1.length < norm2.length ? norm1 : norm2;
-      const longer = norm1.length >= norm2.length ? norm1 : norm2;
-      const ratio = shorter.length / longer.length;
-      if (ratio >= 0.7) { // 70% 이상 포함되면 유사한 가수로 간주
-        return 0.8;
+    const names1 = getArtistNames(artist1);
+    const names2 = getArtistNames(artist2);
+
+    // 본명·괄호 안 다른 표기·별칭 중 하나라도 같으면 같은 가수
+    for (const name of names1) {
+      if (names2.has(name)) return 1.0;
+    }
+
+    // 띄어쓰기·표기 차이 수준만 유사로 인정 (짧은 이름이 긴 이름의 앞부분이고 길이 80% 이상)
+    // 글자 구성만 비교하던 방식은 "아이유"와 "유아이"처럼 다른 가수를 같다고 판단해서 사용하지 않음
+    for (const a of names1) {
+      for (const b of names2) {
+        const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+        if (shorter.length >= 3 && longer.startsWith(shorter) && shorter.length / longer.length >= 0.8) {
+          return 0.8;
+        }
       }
     }
-    
-    // Jaccard 유사도 계산 (간단한 버전)
-    const set1 = new Set([...norm1]);
-    const set2 = new Set([...norm2]);
-    const intersection = new Set([...set1].filter(x => set2.has(x)));
-    const union = new Set([...set1, ...set2]);
-    
-    if (union.size === 0) return 0.0;
-    const similarity = intersection.size / union.size;
-    
-    // 유사도가 0.6 이상이면 유사한 가수로 간주
-    if (similarity >= 0.6) {
-      return 0.8;
-    }
-    
     return 0.0;
   }
 
@@ -153,94 +186,68 @@ class RecommendationService {
    */
   calculateQualityBonus(title) {
     if (!title) return 0;
-    
     const titleLower = title.toLowerCase();
-    
+
     // 음질 좋은 버전 키워드 (높은 점수)
     const highQualityKeywords = [
-      'studio', 'studio version', 'studio recording',
-      '스튜디오', '스튜디오 버전', '스튜디오 녹음',
-      'official', 'official audio', 'official video',
-      '공식', '공식 오디오', '공식 영상',
-      'original', 'original version', 'original recording',
-      '오리지널', '오리지널 버전', '원곡',
-      'album version', 'album track',
-      '앨범 버전', '앨범 트랙',
-      'cd version', 'cd quality',
-      'cd 버전', 'cd 품질',
-      'hq', 'high quality', 'hq audio',
-      '고음질', '고품질',
-      'master', 'mastered', 'master recording',
-      '마스터', '마스터링',
+      'studio', 'studio version', 'studio recording', '스튜디오',
+      'official', 'official audio', 'official video', '공식',
+      'original', 'original version', 'original recording', '오리지널', '원곡',
+      'album version', 'album track', '앨범 버전',
+      'cd version', 'cd quality', 'hq', 'high quality', 'hq audio', '고음질', '고품질',
+      'mastered', 'remastered', '마스터링',
     ];
-    
-    // 음질 낮은 버전 키워드 (점수 감소)
+
+    // 음질 낮은 버전 키워드 (점수 감소) - "Official Live"처럼 함께 있으면 낮은 쪽을 우선
     const lowQualityKeywords = [
-      'live', 'concert', 'performance', 'stage',
-      '라이브', '공연', '무대', '콘서트',
-      'venue', 'arena', 'stadium', 'hall',
-      '공연장', '경기장', '체육관', '홀',
-      'competition', 'contest', 'audition',
-      '대회', '경연', '오디션',
-      'fan cam', 'fancam', 'phone recording',
-      '팬캠', '팬 캠', '핸드폰 녹음',
-      'audience recording', 'crowd recording',
-      '관중 녹음', '군중 녹음',
+      'live', 'concert', 'performance', 'stage', 'fancam', 'fan cam',
+      'competition', 'contest', 'audition', 'phone recording', 'audience recording',
+      '라이브', '공연', '무대', '콘서트', '직캠', '팬캠', '대회', '경연', '오디션', '열창',
+      // 방송 출연 영상 (음원이 아닌 방송 클립)
+      'tvpp', '인기가요', '뮤직뱅크', '음악중심', '엠카운트다운', '쇼챔피언', '불후의 명곡', '복면가왕',
+      '스케치북', '열린음악회', '미스터트롯', '미스트롯', '사랑의콜센타', '사랑의 콜센타',
     ];
-    
-    // 높은 음질 키워드 확인
-    for (const keyword of highQualityKeywords) {
-      if (titleLower.includes(keyword)) {
-        return 1.0; // 최고 점수
-      }
+
+    if (lowQualityKeywords.some((keyword) => hasKeyword(titleLower, keyword))) {
+      return 0.0;
     }
-    
-    // 낮은 음질 키워드 확인
-    for (const keyword of lowQualityKeywords) {
-      if (titleLower.includes(keyword)) {
-        return 0.0; // 점수 없음 (이미 필터링되어야 하지만 추가 보너스 없음)
-      }
+    if (highQualityKeywords.some((keyword) => hasKeyword(titleLower, keyword))) {
+      return 1.0;
     }
-    
     // 키워드가 없으면 기본값 (0.5 - 중간 점수)
     return 0.5;
   }
 
   calculateFinalScore(similarity, artistMatch, popularityScore, diversityBonus = 0, genreMatch = 0, musicRegion = 'all', qualityBonus = 0, channelPriority = 0.5) {
+    // 같은 가수 비중을 낮추고(60% → 35%) AI 임베딩 유사도를 높임(1~4% → 25~30%)
+    // 아티스트 다양성은 추천 목록을 고를 때 별도로 반영 (generateRecommendations의 diversityWeight)
     if (musicRegion === 'domestic') {
-      // 국내: 하트 많은 가수 노래 위주, 음질 좋은 것 우선, 공식 채널 우선
       return (
-        artistMatch * 0.60 + // 1순위: 하트 많은 동일 가수 (60% - 증가)
-        qualityBonus * 0.15 + // 2순위: 음질 보너스 (스튜디오, 공식 버전 등) (15% - 감소)
-        channelPriority * 0.10 + // 3순위: 채널 우선순위 (공식 채널 우선) (10% - 감소)
-        popularityScore * 0.10 + // 4순위: 조회수 높은 노래 (10% - 감소)
-        genreMatch * 0.03 + // 5순위: 유사 장르 (3% - 감소)
-        similarity * 0.02 + // 6순위: 텍스트 유사도 (2%)
-        diversityBonus * 0.00 // 7순위: 아티스트 다양성 (0% - 제거)
+        artistMatch * 0.35 +
+        similarity * 0.28 +
+        qualityBonus * 0.12 +
+        channelPriority * 0.10 +
+        popularityScore * 0.12 +
+        genreMatch * 0.03
       );
     } else if (musicRegion === 'international') {
-      // 해외: 하트 많은 가수 노래 위주, 음질 좋은 것 우선, 공식 채널 우선
       return (
-        artistMatch * 0.55 + // 1순위: 하트 많은 동일 가수 (55% - 증가)
-        qualityBonus * 0.20 + // 2순위: 음질 보너스 (20% - 감소)
-        channelPriority * 0.10 + // 3순위: 채널 우선순위 (공식 채널 우선) (10% - 감소)
-        popularityScore * 0.10 + // 4순위: 조회수 높은 노래 (10% - 감소)
-        genreMatch * 0.03 + // 5순위: 동일 장르 (3%)
-        similarity * 0.01 + // 6순위: 텍스트 유사도 (1%)
-        diversityBonus * 0.01 // 7순위: 아티스트 다양성 (1% - 감소)
-      );
-    } else {
-      // 전체: 하트 많은 가수 노래 위주, 음질 좋은 것 우선, 공식 채널 우선
-      return (
-        artistMatch * 0.60 + // 1순위: 하트 많은 동일 가수 (60% - 증가)
-        qualityBonus * 0.15 + // 2순위: 음질 보너스 (15% - 감소)
-        channelPriority * 0.10 + // 3순위: 채널 우선순위 (공식 채널 우선) (10% - 감소)
-        popularityScore * 0.10 + // 4순위: 인기도 (10% - 감소)
-        similarity * 0.04 + // 5순위: 텍스트 유사도 (4% - 감소)
-        genreMatch * 0.01 + // 6순위: 장르 일치 (1%)
-        diversityBonus * 0.00 // 7순위: 아티스트 다양성 (0% - 제거)
+        artistMatch * 0.35 +
+        similarity * 0.25 +
+        qualityBonus * 0.15 +
+        channelPriority * 0.10 +
+        popularityScore * 0.12 +
+        genreMatch * 0.03
       );
     }
+    return (
+      artistMatch * 0.35 +
+      similarity * 0.30 +
+      qualityBonus * 0.12 +
+      channelPriority * 0.10 +
+      popularityScore * 0.10 +
+      genreMatch * 0.03
+    );
   }
 
   /**
@@ -250,15 +257,14 @@ class RecommendationService {
    */
   extractGenre(title) {
     if (!title) return null;
-
     const titleLower = title.toLowerCase();
-    
-    // 장르 키워드 패턴 (한국어 + 영어)
+
+    // 장르 키워드 패턴 (한국어 + 영어) - 단어 단위로만 비교 ("기록"→록, "Wrap"→랩 오탐 방지)
     const genrePatterns = {
-      'k-pop': ['k-pop', 'kpop', '케이팝', '케이팝'],
+      'k-pop': ['k-pop', 'kpop', '케이팝'],
       'pop': ['pop', '팝', '팝송'],
       'rock': ['rock', '록', '락', '로큰롤'],
-      'hip-hop': ['hip-hop', 'hiphop', '힙합', '랩', 'rap'],
+      'hip-hop': ['hip-hop', 'hiphop', 'hip hop', '힙합', '랩', 'rap', 'trap'],
       'r&b': ['r&b', 'rnb', '알앤비', '소울', 'soul'],
       'jazz': ['jazz', '재즈'],
       'classical': ['classical', '클래식', '교향곡'],
@@ -273,13 +279,10 @@ class RecommendationService {
     };
 
     for (const [genre, keywords] of Object.entries(genrePatterns)) {
-      for (const keyword of keywords) {
-        if (titleLower.includes(keyword)) {
-          return genre;
-        }
+      if (keywords.some((keyword) => hasKeyword(titleLower, keyword, true))) {
+        return genre;
       }
     }
-
     return null;
   }
 
@@ -303,31 +306,33 @@ class RecommendationService {
    */
   extractArtist(title) {
     if (!title) return null;
-    
-    // 대괄호로 시작하는 부분 제거 (예: "[BALLAD]", "[MV]" 등)
-    let cleanedTitle = title.replace(/^\[[^\]]+\]\s*/i, '').trim();
-    
-    // '가수명 - 제목' 형식에서 가수명 추출 (가장 일반적인 형식)
-    // 다양한 구분자로 아티스트 추출 시도
-    const separators = [/[-–—]\s*/, / by /i, / \| /, / \/ /];
-    
+    // 앞쪽의 [MV], 【TVPP】, 날짜(220918) 등 제거
+    const cleanedTitle = title.replace(/^(\s*(\[[^\]]*\]|【[^】]*】|\d{6,8})\s*)+/, '').trim();
+
+    const pickArtist = (part) => {
+      // "갈 길은 내가 만들어내 : Taylor Swift" 처럼 앞에 설명 문구가 붙은 경우 ':' 뒤만 사용
+      let artist = part.split(/\s?[:：]\s/).pop();
+      // 괄호 안 다른 표기는 유지 (같은 가수 판단에 사용), 따옴표·낫표부터는 곡명이므로 제거
+      artist = artist.replace(/['"‘’“”「『].*$/, '').trim();
+      return artist.length > 0 && artist.length < 40 ? artist : null;
+    };
+
+    // '가수 - 제목', '가수 _ 제목', '제목 by 가수' 등
+    const separators = [/\s[-–—]\s|[-–—]\s/, /\s_\s/, / by /i, / \| /, / \/ /];
     for (const sep of separators) {
       const parts = cleanedTitle.split(sep);
       if (parts.length > 1) {
-        // 첫 번째 부분이 가수명 (일반적으로 '가수명 - 제목' 형식)
-        let artist = parts[0].trim();
-        
-        // 괄호 안의 내용 제거 (예: "이우 (LeeWoo)" → "이우", "이우(LEEWOO)" → "이우")
-        // 단, 괄호 안이 영어/한글 혼합인 경우는 영어 부분만 제거
-        artist = artist.replace(/\s*\([^)]*\)/g, '').trim();
-        artist = artist.replace(/\s*\[[^\]]*\]/g, '').trim();
-        
-        if (artist.length > 0 && artist.length < 50) { // 합리적인 길이
-          return artist;
-        }
+        const artist = pickArtist(parts[0]);
+        if (artist) return artist;
       }
     }
-    
+
+    // 구분자 없이 곡명을 따옴표·낫표로 감싼 형식: "BTS (방탄소년단) 'Dynamite' Official MV", "YOASOBI「夜に駆ける」"
+    const quoted = cleanedTitle.match(/^([^'"‘’“”「『]+?)\s*['"‘’“”「『]/);
+    if (quoted) {
+      const artist = pickArtist(quoted[1]);
+      if (artist) return artist;
+    }
     return null;
   }
   
@@ -387,6 +392,26 @@ class RecommendationService {
    * @param {Array} previousArtists - 이전에 선택된 아티스트 배열
    * @returns {number} 다양성 보너스 (0~1)
    */
+  // 같은 가수의 곡은 점수 순으로 maxPerArtist개까지는 그대로 두고, 그 뒤부터는 곡마다 점수를 조금씩 낮춰
+  // 다른 가수 곡과 섞이게 함 (표시 점수와 순서가 어긋나지 않도록 finalScore도 함께 갱신)
+  limitPerArtist(recommendations, maxPerArtist) {
+    const counts = [];
+    const adjusted = recommendations.map((rec) => {
+      const artist = rec.extractedArtist || this.extractArtist(rec.title);
+      if (!artist) return rec;
+      let entry = counts.find((c) => this.calculateArtistMatch(c.artist, artist) >= 1.0);
+      if (!entry) {
+        entry = { artist, count: 0 };
+        counts.push(entry);
+      }
+      entry.count += 1;
+      const overflow = entry.count - maxPerArtist;
+      if (overflow <= 0 || typeof rec.finalScore !== 'number') return rec;
+      return { ...rec, finalScore: rec.finalScore * Math.pow(ARTIST_REPEAT_DECAY, overflow) };
+    });
+    return adjusted.sort((a, b) => (b.finalScore || 0) - (a.finalScore || 0));
+  }
+
   calculateDiversityBonus(currentArtist, previousArtists) {
     if (!currentArtist || previousArtists.length === 0) {
       return 0.15; // 첫 번째 항목은 보너스 증가 (0.1 → 0.15)
@@ -395,7 +420,7 @@ class RecommendationService {
     // 이전에 선택된 아티스트와 다르면 보너스
     const isNewArtist = !previousArtists.some(prev => {
       const normalize = (str) => str.toLowerCase().trim();
-      return normalize(prev) === normalize(currentArtist);
+      return this.calculateArtistMatch(prev, currentArtist) >= 1.0 || normalize(prev) === normalize(currentArtist);
     });
 
     if (isNewArtist) {
@@ -407,7 +432,7 @@ class RecommendationService {
       // 패널티 강화: 최대 -0.1 → -0.2
       const consecutiveCount = previousArtists.filter(prev => {
         const normalize = (str) => str.toLowerCase().trim();
-        return normalize(prev) === normalize(currentArtist);
+        return this.calculateArtistMatch(prev, currentArtist) >= 1.0 || normalize(prev) === normalize(currentArtist);
       }).length;
       return -Math.min(0.2, 0.05 + consecutiveCount * 0.03);
     }
@@ -1425,7 +1450,7 @@ class RecommendationService {
         for (let k = 0; k < seenEmbeddings.length; k++) {
           if (seenEmbeddings[k]) {
             const similarity = SimilarityCalculator.cosineSimilarity(recEmbedding, seenEmbeddings[k]);
-            if (similarity >= 0.85) {
+            if (similarity >= EMBEDDING_DUPLICATE_THRESHOLD) {
               // 추천 결과 내에서도 유사도가 높으면 제외 (0.85 이상) - 같은 노래의 다른 버전 제외
               isDuplicateInResults = true;
               console.log(`[RecommendationService] 추천 결과 내 유사한 제목 제외 (임베딩): "${rec.title}" (유사도: ${(similarity * 100).toFixed(1)}%)`);
@@ -1599,7 +1624,7 @@ class RecommendationService {
             );
             
             // 임계값을 더 엄격하게 (0.70 → 0.85) - 같은 노래의 다른 버전 제외
-            const effectiveThreshold = Math.min(titleSimilarityThreshold, 0.85);
+            const effectiveThreshold = Math.max(titleSimilarityThreshold, EMBEDDING_DUPLICATE_THRESHOLD);
             if (similarity >= effectiveThreshold) {
               // 임베딩 유사도가 임계값 이상이면 제외 (가수명 제외하고 제목만 비교)
               isDuplicate = true;
@@ -1622,7 +1647,7 @@ class RecommendationService {
               allTitleEmbeddings[j]
             );
             
-            const effectiveThreshold = Math.min(titleSimilarityThreshold, 0.85);
+            const effectiveThreshold = Math.max(titleSimilarityThreshold, EMBEDDING_DUPLICATE_THRESHOLD);
             if (similarity >= effectiveThreshold) {
               isDuplicate = true;
               const source = j < queueTitleEmbeddings.length ? '대기열' : '이전 추천';
@@ -1671,15 +1696,19 @@ class RecommendationService {
       }
 
       const timeout = setTimeout(() => {
+        this.socket.off('searchResults', resultsHandler);
         reject(new Error('YouTube 검색 타임아웃'));
       }, 30000); // 30초 타임아웃
 
       // error 이벤트 핸들러는 타임아웃 후에만 처리 (검색 결과가 없는 경우는 에러가 아님)
       let errorHandler = null;
       
-      this.socket.emit('searchMusic', { query });
-      
-      this.socket.once('searchResults', (data) => {
+      // 여러 검색을 동시에 보내도 결과가 섞이지 않도록 요청마다 id를 붙이고 같은 id의 결과만 받음
+      // (id가 있는 결과는 음악 요청 검색 목록에도 표시되지 않음)
+      const requestId = `ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const resultsHandler = (data) => {
+        if (data.requestId !== requestId) return;
+        this.socket.off('searchResults', resultsHandler);
         clearTimeout(timeout);
         // error 이벤트 핸들러 제거 (검색 결과를 받았으므로 에러 핸들러 불필요)
         if (errorHandler) {
@@ -1692,7 +1721,9 @@ class RecommendationService {
         } else {
           resolve([]);
         }
-      });
+      };
+      this.socket.on('searchResults', resultsHandler);
+      this.socket.emit('searchMusic', { query, requestId });
 
       // error 이벤트는 실제 네트워크 오류나 서버 오류일 때만 처리
       // 단순히 검색 결과가 없는 경우는 무시
@@ -2559,10 +2590,11 @@ class RecommendationService {
         const titleDiversityWeight = 0.15; // 15% 가중치
         
         // 최종 점수 = initialScore + (diversityBonus * 가중치) + (titleDiversityBonus * 가중치)
-        const diversityWeight = musicRegion === 'domestic' ? 0.02 : (musicRegion === 'international' ? 0.02 : 0.05);
-        const finalScore = result.initialScore 
+        const diversityWeight = 0.08; // 같은 가수만 반복 추천되지 않도록 다양성 비중 상향 (기존 2~5%)
+        // 보너스를 더해도 100%를 넘지 않도록 0~1로 제한
+        const finalScore = Math.max(0, Math.min(1, result.initialScore
           + (diversityBonus * diversityWeight)
-          + (result.titleDiversityBonus * titleDiversityWeight);
+          + (result.titleDiversityBonus * titleDiversityWeight)));
         
         scoredResults.push({
           ...result,
@@ -2676,7 +2708,7 @@ class RecommendationService {
       // 12. 상위 20개 선택 및 대기열에 있는 노래 확실히 제거
       const queueVideoIdsSet = new Set(queue.map(m => m.videoId || m.id).filter(id => id != null));
       const recommendationsBeforeQueueFilter = finalRecommendations.slice(0, 20);
-      const recommendations = recommendationsBeforeQueueFilter.filter(rec => {
+      const recommendations = this.limitPerArtist(recommendationsBeforeQueueFilter.filter(rec => {
         const recVideoId = rec.videoId || rec.id;
         if (!recVideoId) {
           console.warn('[RecommendationService] 추천 결과에 videoId가 없음:', rec);
@@ -2687,8 +2719,8 @@ class RecommendationService {
           return false;
         }
         return true;
-      });
-      
+      }), MAX_PER_ARTIST_IN_TOP);
+
       // 최종 결과 확인
       if (recommendations.length === 0) {
         console.error('[RecommendationService] 최종 추천 결과가 없습니다. (대기열 필터링 후)');

@@ -14,7 +14,7 @@
   align-items: center;
   justify-content: center;
   padding: 10px 20px;
-  background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+  background: var(--bg-tertiary);
   color: white;
   border: none;
   border-radius: 0;
@@ -86,7 +86,7 @@
 
 .auto-recommendation-select:focus {
   outline: none;
-  border-color: #4CAF50;
+  border-color: var(--accent-text);
 }
 
 .auto-recommendation-confirm-btn {

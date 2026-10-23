@@ -7,6 +7,7 @@ import QueueList from './components/QueueList';
 import ClientList from './components/ClientList';
 import LikedMusicList from './components/LikedMusicList';
 import PlaylistModal from './components/PlaylistModal';
+import './theme.css'; // 리디자인 레이어 (컴포넌트 CSS 뒤에 로드)
 
 // 서버 주소 설정 (환경 변수 또는 현재 호스트 기반)
 const getServerUrl = () => {
@@ -56,6 +57,17 @@ function App() {
   const [isConnected, setIsConnected] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [hasControl, setHasControl] = useState(false);
+  const [skipNotice, setSkipNotice] = useState(null); // 재생 불가 영상 건너뜀 알림
+  // 내가 신청한 곡이 막혔을 때의 기록 (이 브라우저에만 저장)
+  const [myNotices, setMyNotices] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('myRequestNotices') || '[]');
+    } catch (e) {
+      return [];
+    }
+  });
+  const [showMyNotices, setShowMyNotices] = useState(false);
+  const [personalToast, setPersonalToast] = useState(null);
   const sessionIdRef = useRef(getOrCreateSessionId()); // 세션 ID ref
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authPassword, setAuthPassword] = useState('');
@@ -83,6 +95,26 @@ function App() {
   useEffect(() => {
     document.body.className = isDarkMode ? 'dark-mode' : 'light-mode';
   }, []);
+
+  const markAllNoticesRead = () => {
+    setMyNotices((prev) => {
+      const next = prev.map((n) => ({ ...n, read: true }));
+      try {
+        localStorage.setItem('myRequestNotices', JSON.stringify(next));
+      } catch (e) {
+        // 저장 실패 시 이번 접속 동안만 유지
+      }
+      return next;
+    });
+  };
+
+  const formatNoticeTime = (at) => {
+    const date = new Date(at);
+    const isToday = date.toDateString() === new Date().toDateString();
+    return isToday
+      ? date.toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' })
+      : date.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' });
+  };
 
   const toggleTheme = () => {
     setIsDarkMode(prev => !prev);
@@ -339,11 +371,56 @@ function App() {
     });
 
     // 에러 처리
+    // 재생 불가 영상 건너뜀 알림 (alert 대신 잠깐 표시)
+    let skipNoticeTimer = null;
+    const showSkipNotice = (notice, durationMs) => {
+      setSkipNotice(notice);
+      clearTimeout(skipNoticeTimer);
+      if (durationMs) {
+        skipNoticeTimer = setTimeout(() => setSkipNotice(null), durationMs);
+      }
+    };
+    // 내가 신청한 곡 기록 (서버가 신청자에게만 보냄)
+    let personalToastTimer = null;
+    socket.on('myRequestNotice', (notice) => {
+      setMyNotices((prev) => {
+        if (prev.some((n) => n.id === notice.id)) return prev;
+        const next = [{ ...notice, read: false }, ...prev].slice(0, 50);
+        try {
+          localStorage.setItem('myRequestNotices', JSON.stringify(next));
+        } catch (e) {
+          // 저장 실패 시 이번 접속 동안만 유지
+        }
+        return next;
+      });
+      setPersonalToast(notice);
+      clearTimeout(personalToastTimer);
+      personalToastTimer = setTimeout(() => setPersonalToast(null), 7000);
+    });
+
+    socket.on('musicUnplayableSearching', (data) => {
+      // 대체 영상 검색 결과(musicSubstituted / musicSkippedUnplayable)가 올 때까지 유지 (최대 20초)
+      showSkipNotice({ kind: 'searching', title: data.title, code: data.code }, 20000);
+    });
+    socket.on('musicSubstituted', (data) => {
+      showSkipNotice({ kind: 'substituted', title: data.originalTitle, newTitle: data.title, code: data.code }, 6000);
+    });
+    socket.on('musicSkippedUnplayable', (data) => {
+      const seconds = Math.round((data.delayMs || 0) / 1000);
+      showSkipNotice({ kind: 'skip', title: data.title, seconds, code: data.code }, (data.delayMs || 0) + 2000);
+    });
+
     socket.on('error', (error) => {
       alert(error.message);
     });
 
     return () => {
+      socket.off('musicSkippedUnplayable');
+      socket.off('musicUnplayableSearching');
+      socket.off('myRequestNotice');
+      clearTimeout(personalToastTimer);
+      socket.off('musicSubstituted');
+      clearTimeout(skipNoticeTimer);
       socket.off('connect');
       socket.off('disconnect');
       socket.off('currentState');
@@ -522,6 +599,49 @@ function App() {
 
   return (
     <div className="App">
+      {personalToast && (
+        <div className="personal-notice" role="status">
+          <span className="material-icons" aria-hidden="true">music_note</span>
+          <div className="personal-notice-text">
+            <div className="personal-notice-label">내가 신청한 곡</div>
+            <div>
+              {personalToast.kind === 'substituted' ? '막힌 영상이라 다른 영상으로 재생했어요' : personalToast.kind === 'skipped' ? '재생할 수 없는 영상이라 건너뛰었어요' : '외부 재생이 막힌 영상이라 신청하지 못했어요'}
+            </div>
+          </div>
+          <button className="personal-notice-open" onClick={() => { setShowMyNotices(true); setPersonalToast(null); }}>기록 보기</button>
+        </div>
+      )}
+      {skipNotice && (
+        <div className="skip-notice" role="status">
+          <div className="skip-notice-count">
+            {skipNotice.kind === 'skip' ? skipNotice.seconds : (
+              <span className="material-icons" aria-hidden="true">{skipNotice.kind === 'searching' ? 'search' : 'swap_horiz'}</span>
+            )}
+          </div>
+          <div>
+            {skipNotice.kind === 'searching' && (
+              <>
+                <div className="skip-notice-title">재생할 수 없는 영상이라 다른 영상을 찾고 있어요</div>
+                <div className="skip-notice-desc">"{skipNotice.title}"은(는) 외부 재생이 막혀 있어요 (오류 {skipNotice.code})</div>
+              </>
+            )}
+            {skipNotice.kind === 'substituted' && (
+              <>
+                <div className="skip-notice-title">다른 영상으로 재생해요</div>
+                <div className="skip-notice-desc">"{skipNotice.title}" 대신 "{skipNotice.newTitle}"</div>
+              </>
+            )}
+            {skipNotice.kind === 'skip' && (
+              <>
+                <div className="skip-notice-title">재생할 수 없는 영상이에요</div>
+                <div className="skip-notice-desc">
+                  "{skipNotice.title}"은(는) 재생할 수 있는 영상을 찾지 못해 {skipNotice.seconds}초 후 다음 곡으로 넘어가요 (오류 {skipNotice.code})
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
       <div className="container">
         <header className="header">
           <h1>SOUND HUB</h1>
@@ -573,8 +693,51 @@ function App() {
                 <span className="material-icons">{localPlayMode ? 'headphones' : 'speaker'}</span>
               </button>
             </div>
-            <button 
-              onClick={toggleTheme} 
+            <div className="my-notices">
+              <button
+                className="my-notices-btn"
+                onClick={() => setShowMyNotices((v) => !v)}
+                aria-label={`내 신청 기록, 읽지 않음 ${myNotices.filter((n) => !n.read).length}개`}
+                aria-expanded={showMyNotices}
+                title="내 신청 기록"
+              >
+                <span className="material-icons" aria-hidden="true">notifications</span>
+                {myNotices.some((n) => !n.read) && (
+                  <span className="my-notices-badge">{myNotices.filter((n) => !n.read).length}</span>
+                )}
+              </button>
+              {showMyNotices && (
+                <div className="my-notices-panel" role="dialog" aria-label="내 신청 기록">
+                  <div className="my-notices-head">
+                    <span>내 신청 기록</span>
+                    <button className="my-notices-readall" onClick={markAllNoticesRead}>모두 읽음</button>
+                  </div>
+                  {myNotices.length === 0 ? (
+                    <p className="my-notices-empty">내가 신청한 곡이 막히면 여기에 남아요.</p>
+                  ) : (
+                    myNotices.map((n) => (
+                      <div key={n.id} className={`my-notice-item ${n.read ? '' : 'unread'} kind-${n.kind}`}>
+                        <span className="my-notice-icon material-icons" aria-hidden="true">
+                          {n.kind === 'substituted' ? 'swap_horiz' : n.kind === 'skipped' ? 'skip_next' : 'block'}
+                        </span>
+                        <div className="my-notice-text">
+                          <div className="my-notice-title">
+                            {n.kind === 'substituted' ? '다른 영상으로 재생됐어요' : n.kind === 'skipped' ? '재생할 수 없어 건너뛰었어요' : '신청하지 못했어요'}
+                          </div>
+                          <div className="my-notice-desc">
+                            {n.kind === 'substituted' ? `${n.title} → ${n.newTitle}` : n.kind === 'rejected' ? `${n.title} · 외부 재생이 막힌 영상` : n.title}
+                          </div>
+                          <div className="my-notice-time">{formatNoticeTime(n.at)}</div>
+                        </div>
+                        {!n.read && <span className="my-notice-dot" aria-hidden="true"></span>}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+            <button
+              onClick={toggleTheme}
               className="theme-toggle-btn"
               title={isDarkMode ? '라이트 모드로 전환' : '다크 모드로 전환'}
             >
@@ -705,7 +868,8 @@ function App() {
               socket={socket}
               hasControl={hasControl}
             />
-            <CurrentPlaying 
+            <CurrentPlaying
+              mySessionId={sessionIdRef.current}
               music={currentPlaying} 
               isPlaying={isPlaying}
               onPlayNext={handlePlayNext}
@@ -722,7 +886,8 @@ function App() {
             <LikedMusicList 
               socket={socket}
             />
-            <QueueList 
+            <QueueList
+              mySessionId={sessionIdRef.current}
               queue={queue} 
               onRemove={handleRemoveFromQueue}
               onReorder={handleReorderQueue}

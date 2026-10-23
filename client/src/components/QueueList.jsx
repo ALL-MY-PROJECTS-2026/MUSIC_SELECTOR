@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import './QueueList.css';
 
-function QueueList({ queue, onRemove, onReorder, isAdmin = false, hasControl = false }) {
+function QueueList({ queue, onRemove, onReorder, isAdmin = false, hasControl = false, mySessionId = null }) {
   const [draggedIndex, setDraggedIndex] = useState(null);
   const [dragOverIndex, setDragOverIndex] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -121,7 +121,8 @@ function QueueList({ queue, onRemove, onReorder, isAdmin = false, hasControl = f
                   {music.isAIRecommendation && (
                     <span className="queue-ai-badge">AI 추천</span>
                   )}
-                  <p className="queue-requested-by">{music.requestedBy}</p>
+                  {music.isSubstitute && <span className="substitute-badge">대체 영상</span>}
+                  <p className="queue-requested-by">{music.requesterSessionId && music.requesterSessionId === mySessionId ? "나" : music.requestedBy}</p>
                 </div>
               </div>
               {isAdmin && hasControl && (
@@ -130,7 +131,7 @@ function QueueList({ queue, onRemove, onReorder, isAdmin = false, hasControl = f
                   className="remove-btn"
                   title="대기열에서 제거"
                 >
-                  ✕
+                  <span className="material-icons" aria-hidden="true">close</span>
                 </button>
               )}
             </div>

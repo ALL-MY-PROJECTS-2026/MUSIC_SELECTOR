@@ -1,0 +1,575 @@
+/* SOUND HUB 리디자인 레이어 - 모든 컴포넌트 CSS 뒤에 로드되어 공통 스타일을 덮어씀 */
+
+/* ---------- 레이아웃 ---------- */
+.App {
+  padding: 24px 32px 48px;
+}
+
+.container {
+  max-width: 1376px;
+}
+
+.header {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.header h1 {
+  font-size: 22px;
+  letter-spacing: -0.01em;
+  font-weight: 700;
+}
+
+.main-content {
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 24px;
+}
+
+/* 패널 카드 */
+.current-playing,
+.music-request-form,
+.queue-list,
+.liked-music-list,
+.client-list {
+  background: var(--bg-secondary);
+  border: 0;
+  border-radius: var(--radius-lg);
+  padding: 24px;
+}
+
+.current-playing h2,
+.music-request-form h2,
+.queue-list h2,
+.liked-music-list h2,
+.client-list h2 {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+/* ---------- 버튼 / 입력 ---------- */
+.App button {
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.App button:focus-visible,
+.App input:focus-visible,
+.App select:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+
+.App input[type="text"],
+.App input[type="password"],
+.App input[type="search"],
+.App input:not([type]),
+.App select {
+  min-height: 48px;
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 16px;
+}
+
+.App input[type="range"] {
+  accent-color: var(--accent);
+}
+
+/* 비활성 버튼: 포인트 색 버튼의 글자색(!important)을 덮어써서 어두운 배경에서도 보이게 함 */
+.App button:disabled,
+.App button.disabled {
+  background: var(--bg-tertiary) !important;
+  color: var(--text-muted) !important;
+  border: 1px solid var(--border-color) !important;
+  opacity: 1 !important;
+  cursor: not-allowed;
+}
+
+/* 헤더 버튼 (아이콘 버튼) */
+.header-right {
+  flex-wrap: wrap;
+}
+
+.header-right button {
+  min-height: 44px;
+  min-width: 44px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+
+.header-right button:hover {
+  background: var(--bg-tertiary);
+}
+
+.control-status.has-control {
+  color: var(--accent-text);
+  border-color: var(--accent-text);
+  border-radius: var(--radius-md);
+}
+
+.control-status.no-control {
+  border-radius: var(--radius-md);
+}
+
+/* AI 추천 버튼: 그라데이션 대신 보조 버튼 + 포인트 색 글자 */
+.recommendation-button,
+.auto-recommendation-button {
+  background: var(--bg-tertiary) !important;
+  background-image: none !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+  min-height: 44px;
+}
+
+.recommendation-button:hover,
+.auto-recommendation-button:hover {
+  background: var(--bg-hover) !important;
+  border-color: var(--accent-text) !important;
+  transform: none !important;
+}
+
+/* 재생/정지 버튼: 포인트 색 */
+.control-btn {
+  background: var(--accent) !important;
+  color: var(--on-accent) !important;
+  border: 0 !important;
+  min-height: 44px;
+}
+
+.control-btn:hover {
+  background: var(--accent-hover) !important;
+}
+
+/* 위험 동작 버튼: 꽉 찬 빨강 대신 테두리 버튼 */
+.disconnect-all-btn {
+  background: transparent !important;
+  border: 1px solid var(--border-hover) !important;
+  color: var(--accent-text) !important;
+}
+
+.disconnect-all-btn:hover {
+  background: var(--bg-tertiary) !important;
+}
+
+/* 상태 배지: 알약 모양 */
+.connection-status,
+.client-admin-badge,
+.playing-indicator {
+  border-radius: 999px !important;
+}
+
+/* 목록 행: 테두리 대신 둥근 면 */
+.result-item,
+.queue-item,
+.client-item {
+  border-radius: var(--radius-md) !important;
+  border-color: transparent !important;
+  background: var(--bg-primary);
+}
+
+.result-item:hover,
+.queue-item:hover,
+.client-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.pagination,
+.pagination button {
+  border-radius: var(--radius-sm) !important;
+}
+
+/* ---------- 팝업 (공통) ---------- */
+.modal-overlay,
+.playlist-selector-overlay,
+.recommendation-modal-overlay {
+  background: var(--scrim) !important;
+}
+
+.modal-content,
+.playlist-modal,
+.playlist-selector-modal,
+.recommendation-modal-content {
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow) !important;
+  overflow: hidden;
+}
+
+.modal-header,
+.recommendation-modal-header {
+  background: transparent !important;
+  border-bottom: 1px solid var(--border-color) !important;
+  padding: 20px 24px !important;
+}
+
+.modal-header h2,
+.recommendation-modal-header h2 {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.modal-body {
+  padding: 24px !important;
+}
+
+.modal-close-btn,
+.recommendation-modal-close {
+  min-width: 40px;
+  min-height: 40px;
+  background: transparent !important;
+  border: 0 !important;
+  color: var(--text-muted) !important;
+}
+
+.modal-close-btn:hover,
+.recommendation-modal-close:hover {
+  background: var(--bg-tertiary) !important;
+  color: var(--text-primary) !important;
+}
+
+.modal-actions,
+.form-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-cancel,
+.reject-btn {
+  min-height: 48px;
+  padding: 0 20px;
+  background: var(--bg-tertiary) !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-primary) !important;
+  font-weight: 500;
+}
+
+.btn-submit,
+.save-btn {
+  min-height: 48px;
+  padding: 0 20px;
+  background: var(--accent) !important;
+  border: 0 !important;
+  color: var(--on-accent) !important;
+  font-weight: 700;
+}
+
+.btn-submit:hover,
+.save-btn:hover {
+  background: var(--accent-hover) !important;
+}
+
+.received-playlist-item {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+}
+
+.playlist-item-meta {
+  color: var(--text-muted);
+}
+
+/* ---------- 재생 불가 건너뜀 알림 ---------- */
+.skip-notice {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  width: min(560px, calc(100% - 32px));
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow);
+}
+
+.skip-notice-count {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--warn);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+}
+
+.skip-notice-title {
+  font-weight: 700;
+}
+
+.skip-notice-desc {
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+/* ---------- 반응형 ---------- */
+@media (max-width: 968px) {
+  .main-content {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .App {
+    padding: 16px;
+  }
+
+  .current-playing,
+  .music-request-form,
+  .queue-list,
+  .liked-music-list,
+  .client-list {
+    padding: 16px;
+    border-radius: var(--radius-lg);
+  }
+}
+
+/* 장식 효과 제거: 떠오르는 hover, 발광 그림자 */
+.App button:hover,
+.App button:active {
+  transform: none !important;
+}
+
+.App button {
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+/* AI 자동추천 설정 패널 버튼: 초록/빨강 대신 기본 색 체계 */
+.auto-recommendation-confirm-btn {
+  background: var(--accent) !important;
+  color: var(--on-accent) !important;
+  border: 0 !important;
+  font-weight: 700;
+}
+
+.auto-recommendation-confirm-btn:hover {
+  background: var(--accent-hover) !important;
+}
+
+.auto-recommendation-stop-btn {
+  background: transparent !important;
+  border: 1px solid var(--border-hover) !important;
+  color: var(--accent-text) !important;
+}
+
+.auto-recommendation-stop-btn:hover {
+  background: var(--bg-tertiary) !important;
+}
+
+.auto-recommendation-settings {
+  box-shadow: none !important;
+  border-radius: var(--radius-md) !important;
+}
+
+/* ---------- 내 신청 기록 (신청자에게만 표시) ---------- */
+.my-notices {
+  position: relative;
+}
+
+.my-notices-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.my-notices-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+}
+
+.my-notices-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 1000;
+  width: min(360px, calc(100vw - 32px));
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 8px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow);
+}
+
+.my-notices-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 6px 8px;
+  font-weight: 700;
+}
+
+.header-right .my-notices-readall {
+  min-height: 32px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--accent-text);
+  font-size: 13px;
+}
+
+.my-notices-empty {
+  padding: 12px 6px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.my-notice-item {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  border-radius: var(--radius-md);
+}
+
+.my-notice-item + .my-notice-item {
+  margin-top: 4px;
+}
+
+.my-notice-item.unread {
+  background: var(--bg-tertiary);
+}
+
+.my-notice-icon {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: var(--radius-md);
+  background: var(--bg-hover);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: var(--text-muted);
+}
+
+.kind-substituted .my-notice-icon {
+  color: var(--accent-text);
+}
+
+.kind-skipped .my-notice-icon {
+  color: var(--warn);
+}
+
+.my-notice-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.my-notice-title {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.kind-rejected .my-notice-title {
+  color: var(--text-secondary);
+}
+
+.my-notice-desc {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.my-notice-time {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.my-notice-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* 신청자 전용 알림 (모두에게 뜨는 skip-notice와 겹치지 않게 아래쪽에 표시) */
+.personal-notice {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  width: min(480px, calc(100% - 32px));
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  box-shadow: var(--shadow);
+}
+
+.personal-notice .material-icons {
+  color: var(--accent-text);
+}
+
+.personal-notice-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+}
+
+.personal-notice-label {
+  color: var(--accent-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.App .personal-notice-open {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--border-hover);
+  background: transparent;
+  color: var(--text-primary);
+}
+
+/* 대체 영상 표시 */
+.substitute-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-hover);
+  color: var(--text-secondary);
+  font-size: 12px;
+  vertical-align: middle;
+}
