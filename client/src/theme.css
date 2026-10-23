@@ -573,3 +573,18 @@
   font-size: 12px;
   vertical-align: middle;
 }
+
+/* 접속자 목록 헤더: 페이지 이동 + 일괄 해제 */
+.client-list-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 대기열·접속자 목록은 페이지로 나눠 보여주므로 블록 안 세로 스크롤 제거 */
+.queue-list,
+.client-list {
+  max-height: none !important;
+  overflow-y: visible !important;
+}

@@ -3,6 +3,8 @@ import './ClientList.css';
 
 function ClientList({ socket, isAdmin, hasControl }) {
   const [clients, setClients] = useState([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 4;
 
   useEffect(() => {
     if (!socket || !isAdmin) return;
@@ -65,6 +67,17 @@ function ClientList({ socket, isAdmin, hasControl }) {
     return date.toLocaleString('ko-KR');
   };
 
+  // 페이징 계산 (대기열과 같은 방식)
+  const totalPages = Math.ceil(clients.length / itemsPerPage);
+  const pagedClients = clients.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+  // 접속자가 줄어 현재 페이지가 비면 마지막 페이지로 이동
+  useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(totalPages);
+    }
+  }, [totalPages, currentPage]);
+
   if (!isAdmin) {
     return null;
   }
@@ -73,11 +86,38 @@ function ClientList({ socket, isAdmin, hasControl }) {
     <div className="client-list">
       <div className="client-list-header">
         <h2>연결된 클라이언트 ({clients.length})</h2>
-        {hasControl && clients.length > 1 && (
-          <button onClick={handleDisconnectAll} className="disconnect-all-btn">
-            일괄 해제
-          </button>
-        )}
+        <div className="client-list-actions">
+          {totalPages > 1 && (
+            <div className="queue-pagination">
+              <button
+                className="queue-pagination-btn"
+                onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                disabled={currentPage === 1}
+                title="이전 페이지"
+                aria-label="이전 페이지"
+              >
+                <span className="material-icons">chevron_left</span>
+              </button>
+              <span className="queue-pagination-info">
+                {currentPage} / {totalPages}
+              </span>
+              <button
+                className="queue-pagination-btn"
+                onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                disabled={currentPage >= totalPages}
+                title="다음 페이지"
+                aria-label="다음 페이지"
+              >
+                <span className="material-icons">chevron_right</span>
+              </button>
+            </div>
+          )}
+          {hasControl && clients.length > 1 && (
+            <button onClick={handleDisconnectAll} className="disconnect-all-btn">
+              일괄 해제
+            </button>
+          )}
+        </div>
       </div>
       {clients.length === 0 ? (
         <div className="empty-clients">
@@ -85,7 +125,7 @@ function ClientList({ socket, isAdmin, hasControl }) {
         </div>
       ) : (
         <div className="clients-items">
-          {clients.map((client) => (
+          {pagedClients.map((client) => (
             <div key={client.socketId} className="client-item">
               <div className="client-info">
                 <div className="client-header">
