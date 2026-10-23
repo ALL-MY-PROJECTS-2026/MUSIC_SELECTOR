@@ -80,10 +80,10 @@
 
 .recommendation-add-button {
   padding: 8px 16px;
-  background: #4CAF50;
-  color: white;
+  background: var(--accent);
+  color: var(--on-accent);
   border: none;
-  border-radius: 0;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 14px;
   font-weight: 500;
@@ -91,9 +91,9 @@
 }
 
 .recommendation-add-button:hover {
-  background: #45a049;
+  background: var(--accent-hover);
 }
 
 .recommendation-add-button:active {
-  background: #3d8b40;
+  background: var(--accent-hover);
 }

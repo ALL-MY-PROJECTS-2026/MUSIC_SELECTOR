@@ -94,8 +94,8 @@
 
 .client-admin-badge.admin {
   background: var(--bg-primary);
-  color: #4a9eff;
-  border-color: #4a9eff;
+  color: var(--accent-text);
+  border-color: var(--accent-text);
   transition: background-color 0.3s;
 }
 

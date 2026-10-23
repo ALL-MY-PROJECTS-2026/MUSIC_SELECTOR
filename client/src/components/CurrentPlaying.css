@@ -111,27 +111,27 @@
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #4a9eff;
+  background: var(--accent); color: var(--on-accent) !important;
   cursor: pointer;
   transition: background 0.2s;
 }
 
 .volume-slider-vertical::-webkit-slider-thumb:hover {
-  background: #3a8eef;
+  background: var(--accent-hover); color: var(--on-accent) !important;
 }
 
 .volume-slider-vertical::-moz-range-thumb {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #4a9eff;
+  background: var(--accent); color: var(--on-accent) !important;
   cursor: pointer;
   border: none;
   transition: background 0.2s;
 }
 
 .volume-slider-vertical::-moz-range-thumb:hover {
-  background: #3a8eef;
+  background: var(--accent-hover); color: var(--on-accent) !important;
 }
 
 .volume-value-compact {
@@ -150,8 +150,8 @@
   width: 36px;
   height: 36px;
   padding: 0;
-  background: #4a9eff;
-  border: 1px solid #4a9eff;
+  background: var(--accent); color: var(--on-accent) !important;
+  border: 1px solid var(--accent-text);
   border-radius: 50%;
   color: white;
   cursor: pointer;
@@ -159,8 +159,8 @@
 }
 
 .next-btn-compact:hover:not(:disabled) {
-  background: #3a8eef;
-  border-color: #3a8eef;
+  background: var(--accent-hover); color: var(--on-accent) !important;
+  border-color: var(--accent-text);
   transform: scale(1.1);
 }
 
@@ -206,7 +206,7 @@
   border-radius: 50%;
   width: 40px;
   height: 40px;
-  backdrop-filter: blur(4px);
+
 }
 
 .like-icon:hover {
@@ -420,7 +420,7 @@
   padding: 10px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 10px;
 }
 
 .volume-icon {
@@ -445,27 +445,27 @@
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #4a9eff;
+  background: var(--accent); color: var(--on-accent) !important;
   cursor: pointer;
   transition: background 0.2s;
 }
 
 .volume-slider::-webkit-slider-thumb:hover {
-  background: #3a8eef;
+  background: var(--accent-hover); color: var(--on-accent) !important;
 }
 
 .volume-slider::-moz-range-thumb {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #4a9eff;
+  background: var(--accent); color: var(--on-accent) !important;
   cursor: pointer;
   border: none;
   transition: background 0.2s;
 }
 
 .volume-slider::-moz-range-thumb:hover {
-  background: #3a8eef;
+  background: var(--accent-hover); color: var(--on-accent) !important;
 }
 
 .volume-value {
@@ -505,7 +505,7 @@
   font-weight: 600;
   cursor: pointer;
   transition: background 0.2s, border-color 0.2s, color 0.2s;
-  border-radius: 4px;
+  border-radius: 10px;
 }
 
 .toggle-btn:hover {

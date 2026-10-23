@@ -701,7 +701,7 @@ function PlaylistModal({ isOpen, onClose, queue, socket, onLoadPlaylist, hasCont
                     return (
                       <div key={music.videoId} className="liked-music-item ai-recommendation-item">
                         <div className="ai-recommendation-label">
-                          <span className="material-icons">auto_awesome</span>
+                          <span className="material-icons">queue_music</span>
                           <span>AI 추천</span>
                         </div>
                         <div className="liked-music-info">

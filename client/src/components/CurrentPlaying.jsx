@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import './CurrentPlaying.css';
 
-function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdmin = false, hasControl = false, localPlayMode = false, setLocalPlayMode }) {
+function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdmin = false, hasControl = false, localPlayMode = false, setLocalPlayMode, mySessionId = null }) {
   const playerRef = useRef(null);
   const youtubePlayerRef = useRef(null);
   const [playerReady, setPlayerReady] = useState(false);
@@ -9,6 +9,15 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
   const [localIsPlaying, setLocalIsPlaying] = useState(false); // 로컬 재생 상태
   const [isLiked, setIsLiked] = useState(false); // 좋아요 상태
   const [likeCount, setLikeCount] = useState(0); // 좋아요 개수
+  // 플레이어 이벤트 핸들러는 플레이어 생성 시점에 고정되므로 최신 값은 ref로 읽음
+  const hasControlRef = useRef(hasControl);
+  const isPlayingRef = useRef(isPlaying);
+  const localPlayModeRef = useRef(localPlayMode);
+  const musicRef = useRef(music);
+  musicRef.current = music;
+  hasControlRef.current = hasControl;
+  isPlayingRef.current = isPlaying;
+  localPlayModeRef.current = localPlayMode;
   const [serverPlaybackPosition, setServerPlaybackPosition] = useState(null); // 서버 재생 위치
   const [volume, setVolume] = useState(() => {
     // localStorage에서 볼륨 설정 불러오기 (기본값: 100)
@@ -804,7 +813,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                         setTimeout(() => {
                           if (youtubePlayerRef.current) {
                             const state = youtubePlayerRef.current.getPlayerState();
-                            if (state === window.YT.PlayerState.UNSTARTED && window.socket && hasControl) {
+                            if (state === window.YT.PlayerState.UNSTARTED && window.socket && hasControlRef.current) {
                               console.log('[onReady] 동영상 재생 불가능 감지 (UNSTARTED 상태 유지) - 다음 곡으로 이동');
                               if (!endedSentRef.current) {
                                 endedSentRef.current = true;
@@ -823,7 +832,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                         // UNSTARTED 상태는 비디오가 아직 로드 중일 수 있으므로 더 긴 시간 대기
                         // 추가 확인을 위해 5초 후 상태 재확인 (시간 증가)
                         setTimeout(() => {
-                          if (youtubePlayerRef.current && isPlaying) {
+                          if (youtubePlayerRef.current && isPlayingRef.current) {
                             const state = youtubePlayerRef.current.getPlayerState();
                             // CUED, BUFFERING, PAUSED 상태는 정상이므로 다음 곡으로 넘어가지 않음
                             if (state === window.YT.PlayerState.CUED || 
@@ -833,7 +842,7 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
                               return;
                             }
                             // UNSTARTED 상태만 재생 불가능으로 간주
-                            if (state === window.YT.PlayerState.UNSTARTED && window.socket && hasControl) {
+                            if (state === window.YT.PlayerState.UNSTARTED && window.socket && hasControlRef.current) {
                               console.log('[onReady] 재생 실패 감지 (UNSTARTED 상태 유지) - 다음 곡으로 이동');
                               if (!endedSentRef.current) {
                                 endedSentRef.current = true;
@@ -1268,22 +1277,34 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
             // 150: 동영상 소유자가 다른 웹사이트에서 재생할 수 없도록 설정함
             // 2: 요청에 잘못된 매개변수 값이 포함됨 (일시적 오류일 수 있음 - 재시도)
             // 5: HTML5 플레이어 오류 (일시적 오류일 수 있음 - 재시도)
+            // 152, 153은 영상이 아니라 브라우저 설정(Referrer 차단 등) 문제일 수 있으므로 제외
+            // (포함하면 한 클라이언트 때문에 모든 곡이 건너뛰어지고 차단 목록에 저장될 수 있음)
             const unplayableErrorCodes = [100, 101, 150]; // 확실히 재생 불가능한 오류만
             const retryableErrorCodes = [2, 5]; // 재시도 가능한 오류
-            
-            if (window.socket && hasControl && !localPlayMode) {
-              if (unplayableErrorCodes.includes(event.data)) {
-                // 확실히 재생 불가능한 오류만 다음 곡으로 이동
-                console.log('[onError] 재생 불가능한 동영상 감지 (에러 코드:', event.data, ') - 다음 곡으로 이동');
-                if (!endedSentRef.current) {
-                  endedSentRef.current = true;
-                  window.socket.emit('musicEnded');
-                }
-              } else if (retryableErrorCodes.includes(event.data)) {
+
+            if (unplayableErrorCodes.includes(event.data)) {
+              // 제어권 여부와 관계없이 서버에 보고 (서버가 현재 곡인지 확인 후 한 번만 다음 곡으로 이동)
+              console.log('[onError] 재생 불가능한 동영상 감지 (에러 코드:', event.data, ') - 서버에 보고');
+              // 플레이어는 곡이 바뀌어도 재사용되므로(생성 시점의 music이 고정됨) 플레이어에 실제로 로드된 영상 ID를 보고
+              let failedVideoId = null;
+              try {
+                failedVideoId = event.target?.getVideoData?.()?.video_id || null;
+              } catch (e) {
+                // 무시
+              }
+              failedVideoId = failedVideoId || musicRef.current?.videoId;
+              if (window.socket && failedVideoId) {
+                window.socket.emit('musicUnplayable', { videoId: failedVideoId, code: event.data });
+              }
+              return;
+            }
+
+            if (window.socket && hasControlRef.current && !localPlayModeRef.current) {
+              if (retryableErrorCodes.includes(event.data)) {
                 // 재시도 가능한 오류는 재생 시도
                 console.log('[onError] 일시적 오류 감지 (에러 코드:', event.data, ') - 재생 재시도');
                 setTimeout(() => {
-                  if (youtubePlayerRef.current && isPlaying && typeof youtubePlayerRef.current.playVideo === 'function') {
+                  if (youtubePlayerRef.current && isPlayingRef.current && typeof youtubePlayerRef.current.playVideo === 'function') {
                     try {
                       youtubePlayerRef.current.playVideo();
                       console.log('[onError] 재생 재시도 완료');
@@ -3330,7 +3351,10 @@ function CurrentPlaying({ music, isPlaying, onPlayNext, onPause, onResume, isAdm
         </div>
         <div className="music-info">
           <h3>{music.title}</h3>
-          <p className="requested-by">요청자: {music.requestedBy}</p>
+          <p className="requested-by">
+            요청자: {music.requesterSessionId && music.requesterSessionId === mySessionId ? "나" : music.requestedBy}
+            {music.isSubstitute && <span className="substitute-badge">대체 영상</span>}
+          </p>
           
           {/* 플레이어 컨테이너는 항상 렌더링 (제어권 이동 시 DOM 충돌 방지) */}
           {/* 제어권이 없고 로컬 재생 모드가 아니면 숨김, 제어권이 있거나 로컬 재생 모드면 표시 */}

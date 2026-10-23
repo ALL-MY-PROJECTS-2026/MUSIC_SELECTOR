@@ -4,41 +4,52 @@
   box-sizing: border-box;
 }
 
-:root {
-  /* 다크 모드 색상 (기본) */
-  --bg-primary: #1a1a1a;
-  --bg-secondary: #2a2a2a;
-  --bg-tertiary: #3a3a3a;
-  --text-primary: #ffffff;
-  --text-secondary: #cccccc;
-  --border-color: #3a3a3a;
-  --border-hover: #4a4a4a;
-}
-
+:root,
 body.dark-mode {
-  --bg-primary: #1a1a1a;
-  --bg-secondary: #2a2a2a;
-  --bg-tertiary: #3a3a3a;
-  --text-primary: #ffffff;
-  --text-secondary: #cccccc;
-  --border-color: #3a3a3a;
-  --border-hover: #4a4a4a;
+  /* 다크 모드 (기본) - 따뜻한 검정 + 주홍 포인트 */
+  --bg-primary: #121110;
+  --bg-secondary: #1B1A18;
+  --bg-tertiary: #242220;
+  --bg-hover: #2C2A27;
+  --text-primary: #EDEAE4;
+  --text-secondary: #B5AFA6;
+  --text-muted: #948E84;
+  --border-color: #33302C;
+  --border-hover: #46423C;
+  --accent: #FF5B2E;
+  --accent-hover: #FF7A52;
+  --accent-text: #FF7A52;
+  --on-accent: #121110;
+  --warn: #F2B544;
+  --scrim: rgba(10, 9, 8, 0.7);
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --radius-lg: 12px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
 }
 
 body.light-mode {
-  --bg-primary: #ffffff;
-  --bg-secondary: #f5f5f5;
-  --bg-tertiary: #e0e0e0;
-  --text-primary: #1a1a1a;
-  --text-secondary: #666666;
-  --border-color: #cccccc;
-  --border-hover: #999999;
+  /* 라이트 모드 - 종이색 + 주홍 포인트 */
+  --bg-primary: #F6F3EE;
+  --bg-secondary: #FFFFFF;
+  --bg-tertiary: #EFEAE2;
+  --bg-hover: #E7E1D7;
+  --text-primary: #1A1816;
+  --text-secondary: #4A453E;
+  --text-muted: #6B655C;
+  --border-color: #DDD6CB;
+  --border-hover: #C7BFB2;
+  --accent: #FF5B2E;
+  --accent-hover: #F04A1D;
+  --accent-text: #B83A12;
+  --on-accent: #121110;
+  --warn: #9A5B00;
+  --scrim: rgba(26, 24, 22, 0.4);
+  --shadow: 0 8px 24px rgba(26, 24, 22, 0.12);
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  font-family: 'IBM Plex Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   background: var(--bg-primary);
